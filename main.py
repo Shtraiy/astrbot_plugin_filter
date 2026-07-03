@@ -25,26 +25,23 @@ class FilterBugPlugin(Star):
             if not result:
                 return
 
-            # 提取当前消息链中的纯文本
-            plain_text = result.get_plain_text()
-            if not plain_text:
+            chain = result.chain
+            if not chain:
                 return
 
-            # ---- 清洗逻辑：移除 OneBot 工具调用产生的元数据垃圾 ----
-            # 典型垃圾形态：
-            #   [{text=, type=text}], type=text}][{text=[{text=
-            #   柠檬鸭可是南宁当地非常经典且超级开胃的名菜！, type=text}], type=text}]
-            cleaned = self._clean_garbage(plain_text)
+            modified = False
 
-            if cleaned == plain_text:
-                return  # 没有垃圾，无需处理
+            for comp in chain:
+                if isinstance(comp, Plain):
+                    cleaned = self._clean_garbage(comp.text)
+                    if cleaned != comp.text:
+                        comp.text = cleaned
+                        modified = True
 
-            # 用清洗后的纯文本重建消息链
-            result.chain = [Plain(text=cleaned)]
-
-            logger.info(
-                f"[Bug修补大师] 已成功拦截并清洗异常元数据符号。"
-            )
+            if modified:
+                logger.info(
+                    "[Bug修补大师] 已成功拦截并清洗异常元数据符号。"
+                )
 
         except Exception as e:
             logger.error(f"[Bug修补大师] 运行时清洗出错: {e}")
