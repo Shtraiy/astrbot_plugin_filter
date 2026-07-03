@@ -15,7 +15,9 @@ class FilterBugPlugin(Plugin):
             
         # 提取当前准备发送的文本
         text = result.get_plain_text()
-        
+        if not text:
+            return
+            
         # 强行替换和擦除所有变异的系统牛皮癣符号
         garbage_list = [
             "[{text=",
@@ -31,7 +33,7 @@ class FilterBugPlugin(Plugin):
             text = text.replace(garbage, "")
             
         # 顺便把开头和结尾可能残留的空方括号、空换行修剪干净
-        text = text.strip("[] \n,")
+        text = text.strip(" \n")
         
-        # 把干净的文本重新塞回发送队列
-        result.chain[0].text = text
+        # 使用 AstrBot 官方推荐的 API 重新塞回发送队列
+        result.set_plain_text(text)
