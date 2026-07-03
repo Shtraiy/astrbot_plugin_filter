@@ -1,5 +1,12 @@
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.plugin import Plugin, register
+try:
+    from astrbot.api.event import filter, AstrMessageEvent
+    from astrbot.api.plugin import Plugin, register
+except ImportError:
+    try:
+        from astrbot.api.all import filter, AstrMessageEvent, Plugin, register
+    except ImportError:
+        # 最后的保底兼容
+        from astrbot.api import filter, AstrMessageEvent, Plugin, register
 
 @register("filter_bug", "Bug修补大师", "强行擦除系统溢出的流式符号", "1.0.0")
 class FilterBugPlugin(Plugin):
