@@ -1,7 +1,7 @@
 name: astrbot_plugin_filter # 插件唯一识别名，以 astrbot_plugin_ 前缀开头
-display_name: filter # 用于展示的名字，可以是方便人类阅读的名字（需要版本 >= v4.5.0，低版本不会报错，请放心填写）
-desc: 自用插件，用于移除Agent在调用工具时输出的垃圾元数据。 # 插件简短描述
-version: 1.0.0 # 插件版本号。格式：1.1.1 或者 1.1
+display_name: 语言逻辑优化大师 # 用于展示的名字
+desc: 综合优化 AstrBot 输出文本 — 清洗元数据垃圾符号、删除工具调用过程叙述、工具名脱敏替换为自然语言、智能分段长文本。 # 插件简短描述
+version: 2.0.0 # 插件版本号。格式：1.1.1 或者 1.1
 author: Shtraiy # 作者
 repo: https://github.com/Shtraiy/astrbot_plugin_filter # 插件的仓库地址
 astrbot_version: ">=4.16,<5" # 兼容的 AstrBot 版本范围
