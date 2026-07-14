@@ -429,6 +429,7 @@ class LanguageLogicOptimizer(Star):
             return None
 
         try:
+            logger.info(f"[LLM分段] 正在调用 LLM（provider={provider_id}）...")
             llm_resp = await self.context.llm_generate(
                 chat_provider_id=provider_id,
                 prompt=self._SEGMENT_PROMPT.format(text=text),
@@ -478,28 +479,42 @@ class LanguageLogicOptimizer(Star):
         尝试用 LLM 做结构化重组 + 文风润色。
         成功返回优化后文本，失败返回 None（触发降级）。
         """
-        if not self._get_config("enable_llm_style"):
+        enable = self._get_config("enable_llm_style")
+        provider_id = self._get_config("llm_provider_id", "")
+        logger.info(
+            f"[LLM文风] 诊断: enable={enable}, "
+            f"provider={'SET' if provider_id else 'EMPTY'}, "
+            f"text_len={len(text)}"
+        )
+
+        if not enable:
+            logger.info("[LLM文风] 跳过——enable_llm_style 未开启，请在插件配置中打开")
             return None
 
-        provider_id = self._get_config("llm_provider_id", "")
         if not provider_id:
+            logger.warning("[LLM文风] 跳过——llm_provider_id 为空，请在插件配置中选择 LLM 模型")
             return None
 
         if len(text) <= self._SEGMENT_THRESHOLD:
+            logger.info(f"[LLM文风] 跳过——文本过短（{len(text)} ≤ {self._SEGMENT_THRESHOLD}）")
             return None
 
         try:
+            logger.info(f"[LLM文风] 正在调用 LLM（provider={provider_id}）...")
             llm_resp = await self.context.llm_generate(
                 chat_provider_id=provider_id,
                 prompt=self._STYLE_PROMPT.format(text=text),
             )
             result = llm_resp.completion_text.strip()
+            logger.info(f"[LLM文风] LLM 返回 {len(result)} 字符")
 
             if not result:
                 logger.warning("[LLM文风] 返回空结果，降级到下一级")
                 return None
             if len(result) < len(text) * 0.3:
-                logger.warning("[LLM文风] 输出过短（可能截断），降级到下一级")
+                logger.warning(
+                    f"[LLM文风] 输出过短（{len(result)} < {int(len(text) * 0.3)}），降级到下一级"
+                )
                 return None
 
             # 文风优化允许 ±10% 中文字数浮动（轻量润色可能微调措辞）
@@ -519,11 +534,11 @@ class LanguageLogicOptimizer(Star):
                 )
                 return None
 
-            logger.info("[LLM文风] 结构化重组 + 文风润色完成")
+            logger.info(f"[LLM文风] ✓ 结构化重组完成，{para_count} 段")
             return result
 
         except Exception as e:
-            logger.warning(f"[LLM文风] 调用失败，降级到下一级: {e}")
+            logger.warning(f"[LLM文风] LLM 调用异常，降级到下一级: {e}")
             return None
 
     # ============================================================
@@ -538,14 +553,17 @@ class LanguageLogicOptimizer(Star):
         # 1) LLM 文风优化（含结构重组）
         result = await self._try_llm_style_optimize(text)
         if result:
+            logger.info("[分段/文风] 使用 LLM 文风优化")
             return result
 
         # 2) LLM 语义分段
         result = await self._try_llm_segment(text)
         if result:
+            logger.info("[分段/文风] 使用 LLM 语义分段")
             return result
 
         # 3) 规则分段
+        logger.info("[分段/文风] 使用规则分段")
         return self._segment_text(text)
 
     # ============================================================
