@@ -1,8 +1,11 @@
+import asyncio
+import random
 import re
 from astrbot.api.star import Context, Star
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api import logger
 from astrbot.api.message_components import Plain
+from astrbot.api.message_components import MessageChain
 
 
 class LanguageLogicOptimizer(Star):
@@ -47,12 +50,30 @@ class LanguageLogicOptimizer(Star):
                     text = self._filter_sensitive(text)         # ③
                     text = self._remove_tool_narration(text)    # ④
                     text = self._deidentify_tool_names(text)    # ⑤
-                    text = self._segment_text(text)             # ⑥
+                    # ⑥ 分段（LLM 优先，规则降级）
+                    segmented = await self._try_llm_segment(text)
+                    text = segmented if segmented else self._segment_text(text)
                     # =====================================
 
-                    if text != original:
-                        comp.text = text
-                        modified = True
+                    if text == original:
+                        continue
+
+                    # 多消息模式：按段落逐条发送，模拟真人节奏
+                    if self._get_config("multi_message", True):
+                        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                        if len(paragraphs) > 1:
+                            comp.text = paragraphs[0]
+                            modified = True
+                            delay_min = self._get_config("delay_min", 3.0)
+                            delay_max = self._get_config("delay_max", 10.0)
+                            umo = event.unified_msg_origin
+                            asyncio.create_task(
+                                self._send_followups(umo, paragraphs[1:], delay_min, delay_max)
+                            )
+                            continue
+
+                    comp.text = text
+                    modified = True
 
             if modified:
                 logger.info("[语言逻辑优化大师] 已优化输出文本。")
@@ -326,49 +347,179 @@ class LanguageLogicOptimizer(Star):
         return result
 
     # ============================================================
-    #  ⑥ 通用分段
+    #  ⑥ 智能分段（LLM 优先 → 规则降级）
     # ============================================================
 
     _SENTENCE_SPLIT = re.compile(r'(?<=[。！？\n])\s*')
-    _SEGMENT_THRESHOLD = 150    # 短于此值不处理
-    _CHARS_PER_PARA = 200       # 目标每段字数
+    _SEGMENT_THRESHOLD = 150       # 短于此值不处理
+    _CHARS_PER_PARA = 200          # 目标每段字数
+    _MAX_PARAS = 6                 # 最多段数
+
+    # 列表行检测：编号 / 圆圈数字 / 符号前缀
+    _LIST_LINE_RE = re.compile(
+        r'^\s*(?:\d+[\.\)、]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|[-•·▪▸►●○➤✓✅])\s'
+    )
+
+    # ---- LLM 分段提示词（精炼版 ~80 tokens）----
+
+    _SEGMENT_PROMPT = (
+        "按语义将文本分段，用\\n\\n分隔后输出：\n"
+        "- 开头寒暄/回应 → 首段\n"
+        "- 正文按话题自然分组（清单/步骤每3~5项为一段）\n"
+        "- 收尾/关怀 → 末段\n"
+        "通常3~4段，原文>600字可扩至5~6段。若含无关话题用\\n---\\n分隔。\n"
+        "严禁修改任何一个字、标点、语气词、emoji——仅调整分段和换行，不改原文内容。只输出结果。\n\n"
+        "原文：\n{text}"
+    )
+
+    # ============================================================
+    #  配置读取
+    # ============================================================
+
+    def _get_config(self, key: str, default=None):
+        """读取插件配置（兼容多种 AstrBot 版本）"""
+        if hasattr(self, 'config') and isinstance(self.config, dict):
+            return self.config.get(key, default)
+        if hasattr(self.context, 'config') and isinstance(self.context.config, dict):
+            return self.context.config.get(key, default)
+        return default
+
+    # ============================================================
+    #  LLM 语义分段
+    # ============================================================
+
+    async def _try_llm_segment(self, text: str) -> str | None:
+        """
+        尝试用 LLM 做语义分段。
+        成功返回分段后文本，失败返回 None（触发规则降级）。
+        """
+        if not self._get_config("enable_llm_segment"):
+            return None
+
+        provider_id = self._get_config("llm_provider_id", "")
+        if not provider_id:
+            return None
+
+        # 仅对较长文本使用 LLM，短文本无需分段
+        if len(text) <= self._SEGMENT_THRESHOLD:
+            return None
+
+        try:
+            llm_resp = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                prompt=self._SEGMENT_PROMPT.format(text=text),
+            )
+            result = llm_resp.completion_text.strip()
+
+            # 验证：结果不应为空，不应对原文改动过大
+            if not result:
+                logger.warning("[LLM分段] 返回空结果，降级到规则分段")
+                return None
+            if len(result) < len(text) * 0.3:
+                logger.warning("[LLM分段] 输出过短（可能截断），降级到规则分段")
+                return None
+
+            # 验证：严禁 OOC——中文字数不得明显增减（允许 ±5% 含空格差异）
+            orig_han = len(re.findall(r'[一-鿿]', text))
+            result_han = len(re.findall(r'[一-鿿]', result))
+            if orig_han > 0 and abs(orig_han - result_han) > orig_han * 0.05:
+                logger.warning(
+                    f"[LLM分段] 原文内容被篡改（中文字数 {orig_han} → {result_han}），降级到规则分段"
+                )
+                return None
+
+            # 检测是否存在多个无关话题混入（内部标记，不暴露给用户）
+            if '\n---\n' in result:
+                topic_count = result.count('\n---\n') + 1
+                logger.warning(
+                    f"[LLM分段] 检测到 {topic_count} 个无关话题混入。"
+                    f"建议检查 LLM 回复质量，避免无关内容混入用户回复。"
+                )
+                # 去掉 --- 分隔符，替换为正常段落间距，保持活人感
+                result = result.replace('\n---\n', '\n\n')
+
+            logger.info("[LLM分段] 语义分段完成")
+            return result
+
+        except Exception as e:
+            logger.warning(f"[LLM分段] 调用失败，降级到规则分段: {e}")
+            return None
+
+    # ============================================================
+    #  多消息逐段发送
+    # ============================================================
+
+    async def _send_followups(self, umo, paragraphs: list, delay_min: float, delay_max: float):
+        """逐段发送后续消息，段间随机延迟 3~10 秒，模拟真人打字节奏"""
+        for i, para in enumerate(paragraphs):
+            delay = random.uniform(delay_min, delay_max)
+            await asyncio.sleep(delay)
+            try:
+                chain = MessageChain().message(para)
+                await self.context.send_message(umo, chain)
+                logger.info(f"[多消息发送] 第 {i + 2}/{len(paragraphs) + 1} 段已发送（延迟 {delay:.1f}s）")
+            except Exception as e:
+                logger.warning(f"[多消息发送] 第 {i + 2} 段发送失败: {e}")
+
+    # ============================================================
+    #  规则分段（fallback）
+    # ============================================================
+
+    @classmethod
+    def _is_list_block(cls, text: str) -> bool:
+        """检测文本是否为列表结构（≥2 行带编号/符号前缀）"""
+        lines = text.split('\n')
+        list_count = sum(1 for ln in lines if cls._LIST_LINE_RE.match(ln))
+        return list_count >= 2
+
+    @classmethod
+    def _split_long_para(cls, text: str) -> list:
+        """将单个长段落按句子均分成 ~200 字的子段落"""
+        sentences = [s.strip() for s in cls._SENTENCE_SPLIT.split(text) if s.strip()]
+        if len(sentences) <= 2:
+            return [text]
+
+        total = sum(len(s) for s in sentences)
+        n = max(2, min(cls._MAX_PARAS, total // cls._CHARS_PER_PARA))
+        size = max(1, len(sentences) // n)
+
+        paras = []
+        for i in range(n):
+            start = i * size
+            end = len(sentences) if i == n - 1 else start + size
+            para = ' '.join(sentences[start:end]).strip()
+            if para:
+                paras.append(para)
+        return paras
 
     @classmethod
     def _segment_text(cls, text: str) -> str:
         """
-        通用分段：将长文本拆成 ~200 字/段的可读段落，段间空行分隔。
-
-        规则极简：
-        - 短文本（≤150 字）→ 不动
-        - 已有空行分段    → 保留（LLM 已处理好）
-        - 其余一切长文本  → 拆句 → 按 200 字/段重组 → 段间 \\n\\n
+        改进的规则分段：
+        1. 短文本不处理
+        2. 按已有空行先拆段，尊重 LLM/用户手动分段
+        3. 对超长段落进一步细分（列表块除外）
+        4. 段数不足时拆分最长段，最终目标 ≈ 3 段
         """
         if len(text) <= cls._SEGMENT_THRESHOLD:
             return text
 
-        # LLM 已经用空行分好段 → 信任，不动
-        if '\n\n' in text:
-            return text
+        # 按已有空行拆段
+        raw = [p.strip() for p in text.split('\n\n') if p.strip()]
 
-        # 统一拆句：句号、感叹号、问号、换行 都算边界
-        sentences = [s.strip() for s in cls._SENTENCE_SPLIT.split(text) if s.strip()]
+        # 处理每段：超长且非列表 → 细分
+        result = []
+        for para in raw:
+            if len(para) <= cls._CHARS_PER_PARA or cls._is_list_block(para):
+                result.append(para)
+            else:
+                result.extend(cls._split_long_para(para))
 
-        if len(sentences) <= 2:
-            return text
+        # 段数太少（<3）→ 拆分最长段
+        if len(result) < 3 and len(result) > 0:
+            longest_idx = max(range(len(result)), key=lambda i: len(result[i]))
+            longest = result.pop(longest_idx)
+            subs = cls._split_long_para(longest)
+            result[longest_idx:longest_idx] = subs
 
-        # 按每段 ~200 字动态算段数（最少 2，最多 6）
-        total_chars = sum(len(s) for s in sentences)
-        target_count = max(2, min(6, total_chars // cls._CHARS_PER_PARA))
-        seg_count = min(target_count, len(sentences))
-        seg_size = max(1, len(sentences) // seg_count)
-
-        # 均分句子到各段
-        paragraphs = []
-        for i in range(seg_count):
-            start = i * seg_size
-            end = len(sentences) if i == seg_count - 1 else start + seg_size
-            para = ' '.join(sentences[start:end]).strip()
-            if para:
-                paragraphs.append(para)
-
-        return '\n\n'.join(paragraphs)
+        return '\n\n'.join(result)

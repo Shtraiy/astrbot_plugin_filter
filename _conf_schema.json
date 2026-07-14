@@ -1,0 +1,33 @@
+{
+  "llm_provider_id": {
+    "description": "分段用 LLM 模型",
+    "type": "string",
+    "hint": "选择用于智能分段的 LLM 模型（推荐轻量高性价比模型，如 qwen-2.5-7b / glm-4-flash 等）。留空则使用纯规则分段。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "enable_llm_segment": {
+    "description": "启用 LLM 智能分段",
+    "type": "bool",
+    "hint": "开启后使用 LLM 进行语义分段，关闭则使用纯规则分段",
+    "default": false
+  },
+  "multi_message": {
+    "description": "多消息逐段发送",
+    "type": "bool",
+    "hint": "开启后将分段后的文本拆成多条消息，按段落依次发送（模拟真人逐段回复的节奏）。关闭则合并为一条消息发送。",
+    "default": true
+  },
+  "delay_min": {
+    "description": "消息间隔下限（秒）",
+    "type": "float",
+    "hint": "每条消息之间的最小间隔秒数。建议 2~5 秒。",
+    "default": 3.0
+  },
+  "delay_max": {
+    "description": "消息间隔上限（秒）",
+    "type": "float",
+    "hint": "每条消息之间的最大间隔秒数。建议 6~15 秒。",
+    "default": 10.0
+  }
+}
