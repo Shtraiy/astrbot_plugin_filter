@@ -479,7 +479,7 @@ class LanguageLogicOptimizer(Star):
         尝试用 LLM 做结构化重组 + 文风润色。
         成功返回优化后文本，失败返回 None（触发降级）。
         """
-        enable = self._get_config("enable_llm_style")
+        enable = self._get_config("enable_llm_style", False)
         provider_id = self._get_config("llm_provider_id", "")
         logger.info(
             f"[LLM文风] 诊断: enable={enable}, "
@@ -488,7 +488,7 @@ class LanguageLogicOptimizer(Star):
         )
 
         if not enable:
-            logger.info("[LLM文风] 跳过——enable_llm_style 未开启，请在插件配置中打开")
+            logger.info("[LLM文风] 跳过——enable_llm_style=false，请在插件配置中打开")
             return None
 
         if not provider_id:
