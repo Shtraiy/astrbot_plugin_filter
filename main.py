@@ -5,7 +5,7 @@ from astrbot.api.star import Context, Star
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api import logger
 from astrbot.api.message_components import Plain
-from astrbot.api.message_components import MessageChain
+from astrbot.api.all import MessageChain
 
 
 class LanguageLogicOptimizer(Star):
