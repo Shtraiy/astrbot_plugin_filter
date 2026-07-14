@@ -50,9 +50,8 @@ class LanguageLogicOptimizer(Star):
                     text = self._filter_sensitive(text)         # ③
                     text = self._remove_tool_narration(text)    # ④
                     text = self._deidentify_tool_names(text)    # ⑤
-                    # ⑥ 分段（LLM 优先，规则降级）
-                    segmented = await self._try_llm_segment(text)
-                    text = segmented if segmented else self._segment_text(text)
+                    # ⑥ 分段/文风优化（LLM 文风 > LLM 分段 > 规则）
+                    text = await self._apply_segmentation_and_style(text)
                     # =====================================
 
                     if text == original:
@@ -117,7 +116,7 @@ class LanguageLogicOptimizer(Star):
         m = cls._AT_MENTION_RE.search(text)
         if not m:
             return text
-        name = m.group(1)
+        name = m.group(1).strip()
         # 替换各种 "用户" 的变体（按从具体到泛化的顺序）
         text = re.sub(r'用户刚刚发送了新指令[""』」]?', f'{name}刚刚说"', text)
         text = re.sub(r'用户刚刚发送了新消息[""』」]?', f'{name}刚刚说"', text)
@@ -350,10 +349,10 @@ class LanguageLogicOptimizer(Star):
     #  ⑥ 智能分段（LLM 优先 → 规则降级）
     # ============================================================
 
-    _SENTENCE_SPLIT = re.compile(r'(?<=[。！？\n])\s*')
+    _SENTENCE_SPLIT = re.compile(r'(?<=[。！？])\s*')
     _SEGMENT_THRESHOLD = 150       # 短于此值不处理
-    _CHARS_PER_PARA = 200          # 目标每段字数
-    _MAX_PARAS = 6                 # 最多段数
+    _CHARS_PER_PARA = 300          # 目标每段字数
+    _MAX_PARAS = 5                 # 最多段数
 
     # 列表行检测：编号 / 圆圈数字 / 符号前缀
     _LIST_LINE_RE = re.compile(
@@ -369,6 +368,31 @@ class LanguageLogicOptimizer(Star):
         "- 收尾/关怀 → 末段\n"
         "通常3~5段，原文>600字可扩至6段。若含无关话题用\\n---\\n分隔。\n"
         "严禁修改任何一个字、标点、语气词、emoji——仅调整分段和换行，不改原文内容。只输出结果。\n\n"
+        "原文：\n{text}"
+    )
+
+    # ---- LLM 文风优化提示词 ----
+
+    _STYLE_PROMPT = (
+        "优化以下文本的结构和可读性。\n\n"
+        "【硬约束——必须严格遵守】\n"
+        "1. 人设不变：语气、口头禅、emoji、称呼方式完全保留，不改动任何一个体现性格的词\n"
+        "2. 内容不变：原文所有信息必须保留，不添加原文没有的事实或建议\n"
+        "3. 语义不变：每句话的原意不能有任何偏差\n\n"
+        "【输出结构】\n"
+        "- 第1段（开场）：寒暄/回应/引入话题\n"
+        "- 中间1~3段（正文）：核心内容。如有操作步骤/方法/要点，用序号分行：\n"
+        "  1. 第一步内容\n"
+        "  2. 第二步内容\n"
+        "  同类步骤放在同一段内，不同主题拆到不同段\n"
+        "- 最后1段（收尾）：总结/关怀/温馨收尾\n"
+        "- 总共不超过5段，段与段之间用空行分隔\n\n"
+        "【润色范围——仅在不违背硬约束时执行】\n"
+        "- 过长句子适当拆短，让阅读更轻松\n"
+        "- 去除重复啰嗦的表述\n"
+        "- 段落内信息密度尽量均衡\n\n"
+        "【输出格式】\n"
+        "只输出优化后的文本。不要加任何前缀、后缀或解释。\n\n"
         "原文：\n{text}"
     )
 
@@ -446,6 +470,85 @@ class LanguageLogicOptimizer(Star):
             return None
 
     # ============================================================
+    #  LLM 文风优化
+    # ============================================================
+
+    async def _try_llm_style_optimize(self, text: str) -> str | None:
+        """
+        尝试用 LLM 做结构化重组 + 文风润色。
+        成功返回优化后文本，失败返回 None（触发降级）。
+        """
+        if not self._get_config("enable_llm_style"):
+            return None
+
+        provider_id = self._get_config("llm_provider_id", "")
+        if not provider_id:
+            return None
+
+        if len(text) <= self._SEGMENT_THRESHOLD:
+            return None
+
+        try:
+            llm_resp = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                prompt=self._STYLE_PROMPT.format(text=text),
+            )
+            result = llm_resp.completion_text.strip()
+
+            if not result:
+                logger.warning("[LLM文风] 返回空结果，降级到下一级")
+                return None
+            if len(result) < len(text) * 0.3:
+                logger.warning("[LLM文风] 输出过短（可能截断），降级到下一级")
+                return None
+
+            # 文风优化允许 ±10% 中文字数浮动（轻量润色可能微调措辞）
+            orig_han = len(re.findall(r'[一-鿿]', text))
+            result_han = len(re.findall(r'[一-鿿]', result))
+            if orig_han > 0 and abs(orig_han - result_han) > orig_han * 0.10:
+                logger.warning(
+                    f"[LLM文风] 内容偏差过大（中文字数 {orig_han} → {result_han}），降级到下一级"
+                )
+                return None
+
+            # 验证段数：不应超过 _MAX_PARAS + 1（给 LLM 一点弹性）
+            para_count = len([p for p in result.split('\n\n') if p.strip()])
+            if para_count > self._MAX_PARAS + 1:
+                logger.warning(
+                    f"[LLM文风] 段数过多（{para_count} > {self._MAX_PARAS + 1}），降级到下一级"
+                )
+                return None
+
+            logger.info("[LLM文风] 结构化重组 + 文风润色完成")
+            return result
+
+        except Exception as e:
+            logger.warning(f"[LLM文风] 调用失败，降级到下一级: {e}")
+            return None
+
+    # ============================================================
+    #  分段/文风统一入口
+    # ============================================================
+
+    async def _apply_segmentation_and_style(self, text: str) -> str:
+        """优先级：LLM 文风优化 > LLM 语义分段 > 规则分段"""
+        if len(text) <= self._SEGMENT_THRESHOLD:
+            return text
+
+        # 1) LLM 文风优化（含结构重组）
+        result = await self._try_llm_style_optimize(text)
+        if result:
+            return result
+
+        # 2) LLM 语义分段
+        result = await self._try_llm_segment(text)
+        if result:
+            return result
+
+        # 3) 规则分段
+        return self._segment_text(text)
+
+    # ============================================================
     #  多消息逐段发送
     # ============================================================
 
@@ -487,7 +590,7 @@ class LanguageLogicOptimizer(Star):
         for i in range(n):
             start = i * size
             end = len(sentences) if i == n - 1 else start + size
-            para = ' '.join(sentences[start:end]).strip()
+            para = ''.join(sentences[start:end])
             if para:
                 paras.append(para)
         return paras
@@ -499,10 +602,17 @@ class LanguageLogicOptimizer(Star):
         1. 短文本不处理
         2. 按已有空行先拆段，尊重 LLM/用户手动分段
         3. 对超长段落进一步细分（列表块除外）
-        4. 段数不足时拆分最长段，最终目标 ≈ 3 段
+        4. 段数不足时拆分最长段；段数超限时合并最短段
+        5. 最终目标：3~5 段
         """
         if len(text) <= cls._SEGMENT_THRESHOLD:
             return text
+
+        # ---- 预处理：单换行规范化 ----
+        # 把 "句子结束。\n下一段" 提升为 "\n\n"（真正的段落分隔）
+        text = re.sub(r'([。！？])\n(?!\n)', r'\1\n\n', text)
+        # 把 3 个以上连续换行折叠为双换行
+        text = re.sub(r'\n{3,}', '\n\n', text)
 
         # 按已有空行拆段
         raw = [p.strip() for p in text.split('\n\n') if p.strip()]
@@ -521,5 +631,20 @@ class LanguageLogicOptimizer(Star):
             longest = result.pop(longest_idx)
             subs = cls._split_long_para(longest)
             result[longest_idx:longest_idx] = subs
+
+        # 段数超限（>_MAX_PARAS）→ 合并最短段到较短邻居
+        while len(result) > cls._MAX_PARAS:
+            i = min(range(len(result)), key=lambda i: len(result[i]))
+            # 选择较短的邻居合并
+            if i == 0:
+                j = 1
+            elif i == len(result) - 1:
+                j = i - 1
+            else:
+                j = i - 1 if len(result[i - 1]) <= len(result[i + 1]) else i + 1
+            # 保证 left < right
+            left, right = (i, j) if i < j else (j, i)
+            result[left] = result[left] + '\n\n' + result[right]
+            result.pop(right)
 
         return '\n\n'.join(result)

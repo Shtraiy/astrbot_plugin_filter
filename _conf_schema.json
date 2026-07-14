@@ -1,10 +1,16 @@
 {
   "llm_provider_id": {
-    "description": "分段用 LLM 模型",
+    "description": "分段/文风优化用 LLM 模型",
     "type": "string",
-    "hint": "选择用于智能分段的 LLM 模型（推荐轻量高性价比模型，如 qwen-2.5-7b / glm-4-flash 等）。留空则使用纯规则分段。",
+    "hint": "选择用于智能分段和文风优化的 LLM 模型（推荐轻量高性价比模型，如 qwen-2.5-7b / glm-4-flash 等）。留空则使用纯规则分段。",
     "default": "",
     "_special": "select_provider"
+  },
+  "enable_llm_style": {
+    "description": "启用 LLM 文风优化",
+    "type": "bool",
+    "hint": "开启后使用 LLM 对文本进行结构化重组和文风润色（保持人设不变）。含智能分段功能，无需同时开启 LLM 智能分段。",
+    "default": false
   },
   "enable_llm_segment": {
     "description": "启用 LLM 智能分段",
