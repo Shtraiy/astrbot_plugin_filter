@@ -297,7 +297,7 @@ def _segment_text(text: str) -> str:
     5. 段数不足时拆分最长段；段数超限时合并最短段
     6. 最终目标：3~5 段
     """
-    if len(text) <= SEGMENT_THRESHOLD:
+    if len(text) <= SEGMENT_THRESHOLD and text.count('\n\n') < 2:
         return text
 
     # ---- 预处理：密集文本的段落拆分 ----
@@ -339,7 +339,26 @@ def _segment_text(text: str) -> str:
         else:
             j = i - 1 if len(result[i - 1]) <= len(result[i + 1]) else i + 1
         left, right = (i, j) if i < j else (j, i)
-        result[left] = result[left] + '\n\n' + result[right]
+        result[left] = result[left] + '\n' + result[right]
         result.pop(right)
+
+    # 合并孤立的过渡句：短句（≤80字）以冒号结尾 → 跟下一段合并
+    # 避免 "除此以外，她还唱过很多歌哦：\n\n比如..." 的割裂感
+    merged = []
+    skip_next = False
+    for i, para in enumerate(result):
+        if skip_next:
+            skip_next = False
+            continue
+        stripped = para.rstrip()
+        if (i < len(result) - 1
+                and len(stripped) <= 80
+                and stripped.endswith(('：', ':'))
+                and '\n' not in stripped):  # 纯单行过渡句，不含内部换行
+            merged.append(stripped + '\n' + result[i + 1].lstrip())
+            skip_next = True
+        else:
+            merged.append(para)
+    result = merged
 
     return '\n\n'.join(result)

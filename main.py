@@ -87,7 +87,8 @@ class LanguageLogicOptimizer(Star):
                     # ⑦ 分段/文风优化（LLM 文风 > LLM 分段 > 规则）
                     text, changed = await _apply_pipeline_async(
                         "⑦分段优化", apply_segmentation_and_style,
-                        text, self.context, self._get_config, pipeline_stats,
+                        text, self.context, self._get_config,
+                        stats=pipeline_stats,
                     )
                     # =====================================
 
@@ -110,10 +111,8 @@ class LanguageLogicOptimizer(Star):
                             pipeline_stats["⑧图片渲染"] = pipeline_stats.get("⑧图片渲染", 0) + 1
                             continue
 
-                    if text == original:
-                        continue
-
-                    # 多消息模式：按段落逐条发送，模拟真人节奏
+                    # ============ 多消息 & 最终写入 ============
+                    # 多消息模式优先——即使文本未被管线修改，也要按段落拆分
                     if self._get_config("multi_message", True):
                         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
                         if len(paragraphs) > 1:
@@ -128,6 +127,10 @@ class LanguageLogicOptimizer(Star):
                             )
                             self._track_task(task)
                             continue
+
+                    # 文本未被任何管线修改 → 无需替换原文
+                    if text == original:
+                        continue
 
                     comp.text = text
                     modified = True
