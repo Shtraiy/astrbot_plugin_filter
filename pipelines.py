@@ -363,7 +363,7 @@ def deidentify_tool_names(text: str) -> str:
 
 # 高置信度AI填充句——可整句安全删除（纯结构性胶水，不含信息）
 _AI_FILLER_PATTERNS = [
-    re.compile(r'^我这就把.{0,20}(?:整理|梳理|列出|总结|归纳).{0,10}[：:]?$'),
+    re.compile(r'^我这就把.{0,35}(?:整理|梳理|列出|总结|归纳|分享|告诉|介绍|说明|解释|教给).{0,10}?[：:]?$'),
     re.compile(r'^我来[给帮为].{0,15}(?:梳理|整理|介绍|说明|解释).{0,10}[：:]?$'),
     re.compile(r'^接下来[我让].{0,15}(?:介绍|说明|解释|展开|讲讲).{0,10}[：:]?$'),
     re.compile(r'^以下是.{0,10}[：:]?$'),
@@ -377,7 +377,7 @@ _AI_FILLER_PATTERNS = [
 # AI填充前缀——紧接内容时剥离前缀、保留正文
 # 与 _AI_FILLER_PATTERNS 共享模式核心，加上 [：:]\s* 后缀
 _AI_FILLER_PREFIXES = [
-    (re.compile(r'^我这就把.{0,20}(?:整理|梳理|列出|总结|归纳).{0,10}[：:]\s*'), ''),
+    (re.compile(r'^我这就把.{0,35}(?:整理|梳理|列出|总结|归纳|分享|告诉|介绍|说明|解释|教给).{0,10}?[：:]\s*'), ''),
     (re.compile(r'^我来[给帮为].{0,15}(?:梳理|整理|介绍|说明|解释).{0,10}[：:]\s*'), ''),
     (re.compile(r'^接下来[我让].{0,15}(?:介绍|说明|解释|展开|讲讲).{0,10}[：:]\s*'), ''),
     (re.compile(r'^以下是.{0,10}[：:]\s*'), ''),
@@ -415,6 +415,64 @@ def _strip_ai_prefix(sentence: str) -> str:
     return sentence
 
 
+# ============================================================
+#  重复句去重 & 收尾断段
+# ============================================================
+
+def _normalize_to_bigrams(s: str) -> set:
+    """归一化句子为 2-gram 字符集合，忽略标点和空格"""
+    cleaned = re.sub(r'[，,。！？、\s]', '', s)
+    return set(cleaned[i:i + 2] for i in range(len(cleaned) - 1))
+
+
+def _jaccard(a: set, b: set) -> float:
+    """Jaccard 相似度"""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _dedupe_consecutive(sentences: list[str]) -> list[str]:
+    """移除连续出现的高度相似句子或句子对（LLM 重复生成 artifact）。
+    使用归一化后 Jaccard 相似度，阈值 ≥0.7 判定为重复。
+    同时检测单句重复和 2 句序列重复（如"收尾提问 + 补充说明"的成对重复）。"""
+    if len(sentences) <= 1:
+        return sentences
+
+    result = [sentences[0]]
+    i = 1
+    while i < len(sentences):
+        # 单句去重：与 result 最后一句比较
+        prev = _normalize_to_bigrams(result[-1])
+        curr = _normalize_to_bigrams(sentences[i])
+        if _jaccard(prev, curr) >= 0.7:
+            i += 1
+            continue
+
+        # 2 句序列去重：检查是否为成对重复（如 "收尾提问？补充说明！" 的整体重复）
+        if i + 1 < len(sentences) and len(result) >= 2:
+            prev_pair = result[-2] + result[-1]
+            curr_pair = sentences[i] + sentences[i + 1]
+            prev_norm = _normalize_to_bigrams(prev_pair)
+            curr_norm = _normalize_to_bigrams(curr_pair)
+            if _jaccard(prev_norm, curr_norm) >= 0.7:
+                i += 2
+                continue
+
+        result.append(sentences[i])
+        i += 1
+
+    return result
+
+
+# 收尾提问句式：对用户的直接提问/关怀，标志着话题从"内容输出"切换到"回访用户"
+_CLOSING_QUESTION_RE = re.compile(
+    r'(?<=[！！?？])\s*'
+    r'(?=(?:你(?:今天|现在|打算|准备|等会儿|有空|想|要|可以|觉得|也)'
+    r'|如果[有你]|要不要|记得|别忘了|试试看))'
+)
+
+
 def de_ai_flavor(text: str) -> str:
     """
     ⑥ 去AI味 —— 正则清除高频AI公式化表达。
@@ -440,13 +498,23 @@ def de_ai_flavor(text: str) -> str:
             stripped = sent.strip()
             if not stripped:
                 continue
-            # 1a. 纯填充句 → 整句删除
+            # 1a. 先尝试剥离前缀（保留后续正文）
+            after_strip = _strip_ai_prefix(stripped)
+            if after_strip != stripped:
+                # 前缀被剥离 → 如果有剩余内容则保留，否则视为纯填充句删除
+                if after_strip.strip():
+                    kept.append(after_strip)
+                else:
+                    total_removed += 1
+                continue
+            # 1b. 无前缀可剥离 → 检查是否为纯填充句（如"以上就是全部内容。"）
             if _is_ai_filler(stripped):
                 total_removed += 1
                 continue
-            # 1b. 填充前缀 → 剥离前缀，保留正文
-            stripped = _strip_ai_prefix(stripped)
             kept.append(stripped)
+
+        # 1c. 相邻重复句去重（LLM 重复生成 artifact）
+        kept = _dedupe_consecutive(kept)
 
         para = ''.join(kept)
 
@@ -491,6 +559,8 @@ def de_ai_flavor(text: str) -> str:
     text = '\n\n'.join(p for p in processed_paras if p) if processed_paras else text
 
     # === 第三层：清理多余空白 ===
+    # 3a. 收尾提问断段：！/？后紧跟第二人称提问 → 插入段落分隔
+    text = _CLOSING_QUESTION_RE.sub('\n\n', text)
     text = re.sub(r'([。！？])\1+', r'\1', text)      # 连续标点去重
     text = re.sub(r'\n{3,}', '\n\n', text)             # 多余空行折叠
     text = re.sub(r'[ \t]{2,}', ' ', text)             # 多余水平空格（不触碰换行）
