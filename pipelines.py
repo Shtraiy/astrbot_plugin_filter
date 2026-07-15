@@ -310,7 +310,7 @@ def remove_tool_narration(text: str) -> str:
     for para in paragraphs:
         if not para.strip():
             continue
-        sentences = re.split(r'(?<=[。！？\n])\s*', para)
+        sentences = re.split(r'(?<=[。！？])\s*', para)
         kept = []
         for sent in sentences:
             stripped = sent.strip()
@@ -319,9 +319,9 @@ def remove_tool_narration(text: str) -> str:
             if _TOOL_FUNCTION_NAMES.search(stripped) and _NARRATION_MARKERS.search(stripped):
                 continue
             kept.append(stripped)
-        processed.append(''.join(kept) if kept else para)
+        processed.append(''.join(kept))
 
-    return '\n\n'.join(processed) if processed else text
+    return '\n\n'.join(p for p in processed if p) if processed else text
 
 
 # ============================================================
@@ -426,7 +426,7 @@ def de_ai_flavor(text: str) -> str:
             continue
 
         # === 第一层：逐句处理 ===
-        sentences = re.split(r'(?<=[。！？\n])\s*', para)
+        sentences = re.split(r'(?<=[。！？])\s*', para)
         kept = []
         for sent in sentences:
             stripped = sent.strip()
@@ -440,7 +440,7 @@ def de_ai_flavor(text: str) -> str:
             stripped = _strip_ai_prefix(stripped)
             kept.append(stripped)
 
-        para = ''.join(kept) if kept else para
+        para = ''.join(kept)
 
         # === 第二层：模式替换 ===
 
@@ -480,7 +480,7 @@ def de_ai_flavor(text: str) -> str:
     if total_removed > 0:
         logger.info("[去AI味] 移除了 %d 句AI填充句", total_removed)
 
-    text = '\n\n'.join(processed_paras) if processed_paras else text
+    text = '\n\n'.join(p for p in processed_paras if p) if processed_paras else text
 
     # === 第三层：清理多余空白 ===
     text = re.sub(r'([。！？])\1+', r'\1', text)      # 连续标点去重

@@ -66,12 +66,14 @@ async def try_llm_segment(text: str, context, get_config) -> str | None:
     """
     尝试用 LLM 做语义分段。
     成功返回分段后文本，失败返回 None（触发规则降级）。
+    注意：此函数的 LLM 调用失败不会影响主对话——插件会自动降级到规则分段。
     """
     if not get_config("enable_llm_segment"):
         return None
 
     provider_id = get_config("llm_provider_id", "")
     if not provider_id:
+        logger.info("[LLM分段] 未配置 llm_provider_id，跳过。请在插件配置中选择 LLM 模型。")
         return None
 
     if len(text) <= SEGMENT_THRESHOLD:
@@ -116,7 +118,12 @@ async def try_llm_segment(text: str, context, get_config) -> str | None:
         return result
 
     except Exception:
-        logger.warning("[LLM分段] 调用失败，降级到规则分段", exc_info=True)
+        logger.warning(
+            "[LLM分段] LLM 调用失败（provider=%s），自动降级到规则分段。"
+            "这不影响主对话回复，仅分段功能回退。"
+            "如不需要 LLM 分段，可在配置中关闭 enable_llm_segment。",
+            provider_id, exc_info=True,
+        )
         return None
 
 
@@ -136,7 +143,7 @@ async def try_llm_style_optimize(text: str, context, get_config) -> str | None:
         return None
 
     if not provider_id:
-        logger.warning("[LLM文风] 跳过——llm_provider_id 为空，请在插件配置中选择 LLM 模型")
+        logger.info("[LLM文风] 未配置 llm_provider_id，跳过。请在插件配置中选择 LLM 模型。")
         return None
 
     if len(text) <= SEGMENT_THRESHOLD:
@@ -176,7 +183,11 @@ async def try_llm_style_optimize(text: str, context, get_config) -> str | None:
         return result
 
     except Exception:
-        logger.warning("[LLM文风] LLM 调用异常，降级到下一级", exc_info=True)
+        logger.warning(
+            "[LLM文风] LLM 调用失败（provider=%s），自动降级到规则分段。"
+            "这不影响主对话回复。如不需要 LLM 文风优化，可在配置中关闭 enable_llm_style。",
+            provider_id, exc_info=True,
+        )
         return None
 
 
