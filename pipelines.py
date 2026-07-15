@@ -167,7 +167,11 @@ def clean_garbage(text: str) -> str:
     """移除 OneBot / MCP 工具调用泄漏的元数据符号"""
     cleaned = _GARBAGE_RE.sub('', text)
     cleaned = cleaned.strip(_STRIP_CHARS)
-    cleaned = re.sub(r'\s+', ' ', cleaned)
+    # 只压缩水平空白（空格/Tab），保留换行结构，否则后续分段管线无结构可依
+    cleaned = re.sub(r'[ \t]+', ' ', cleaned)
+    # 清理行首行尾空格，规范化连续空行（≥3个 → 2个）
+    cleaned = re.sub(r'[ \t]*\n[ \t]*', '\n', cleaned)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.strip()
 
 
@@ -260,10 +264,10 @@ def filter_sensitive(text: str) -> str:
     text = _SHELL_CMD_RE.sub('', text)
     text = _INTERNAL_IP_RE.sub('', text)
     text = _SYSTEM_INFO_LINE_RE.sub('', text)
-    # 清理路径删除后的残余碎片
-    text = re.sub(r'里\s+的\s*(?:文件夹|目录|路径)?', '', text)
-    text = re.sub(r'[下中]\s+的\s*(?:文件夹|目录|路径)?', '', text)
-    text = re.sub(r'\s{2,}', ' ', text)
+    # 清理路径删除后的残余碎片（仅匹配水平空白，保留换行结构）
+    text = re.sub(r'里[ \t]+的[ \t]*(?:文件夹|目录|路径)?', '', text)
+    text = re.sub(r'[下中][ \t]+的[ \t]*(?:文件夹|目录|路径)?', '', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
     return text
 
 
@@ -299,19 +303,25 @@ def remove_tool_narration(text: str) -> str:
     """
     删除同时满足两个条件的句子：
     (a) 包含工具函数名  AND  (b) 包含过程叙述标记
+    逐段处理，保留原文的 \\n\\n 段落结构。
     """
-    sentences = re.split(r'(?<=[。！？\n])\s*', text)
-    kept = []
-
-    for sent in sentences:
-        stripped = sent.strip()
-        if not stripped:
+    paragraphs = text.split('\n\n')
+    processed = []
+    for para in paragraphs:
+        if not para.strip():
             continue
-        if _TOOL_FUNCTION_NAMES.search(stripped) and _NARRATION_MARKERS.search(stripped):
-            continue
-        kept.append(stripped)
+        sentences = re.split(r'(?<=[。！？\n])\s*', para)
+        kept = []
+        for sent in sentences:
+            stripped = sent.strip()
+            if not stripped:
+                continue
+            if _TOOL_FUNCTION_NAMES.search(stripped) and _NARRATION_MARKERS.search(stripped):
+                continue
+            kept.append(stripped)
+        processed.append(''.join(kept) if kept else para)
 
-    return ' '.join(kept) if kept else text
+    return '\n\n'.join(processed) if processed else text
 
 
 # ============================================================
@@ -400,69 +410,81 @@ def _strip_ai_prefix(sentence: str) -> str:
 def de_ai_flavor(text: str) -> str:
     """
     ⑥ 去AI味 —— 正则清除高频AI公式化表达。
+    逐段处理，保留原文的 \\n\\n 段落结构。
     三层策略：
       第一层：逐句处理（整句删除纯填充句 / 剥离前缀保留正文）
       第二层：模式替换（去括号、去论文衔接词、去"第X步是"前缀）
       第三层：清理多余空白
     """
-    # === 第一层：逐句处理 ===
-    sentences = re.split(r'(?<=[。！？\n])\s*', text)
-    kept = []
-    removed_count = 0
-    for sent in sentences:
-        stripped = sent.strip()
-        if not stripped:
+    # 先按段落拆分，处理完后再拼回去，保护分段结构
+    paragraphs = text.split('\n\n')
+    processed_paras = []
+    total_removed = 0
+
+    for para in paragraphs:
+        if not para.strip():
             continue
-        # 1a. 纯填充句 → 整句删除
-        if _is_ai_filler(stripped):
-            removed_count += 1
-            continue
-        # 1b. 填充前缀 → 剥离前缀，保留正文
-        stripped = _strip_ai_prefix(stripped)
-        kept.append(stripped)
 
-    if removed_count > 0:
-        logger.info("[去AI味] 移除了 %d 句AI填充句", removed_count)
+        # === 第一层：逐句处理 ===
+        sentences = re.split(r'(?<=[。！？\n])\s*', para)
+        kept = []
+        for sent in sentences:
+            stripped = sent.strip()
+            if not stripped:
+                continue
+            # 1a. 纯填充句 → 整句删除
+            if _is_ai_filler(stripped):
+                total_removed += 1
+                continue
+            # 1b. 填充前缀 → 剥离前缀，保留正文
+            stripped = _strip_ai_prefix(stripped)
+            kept.append(stripped)
 
-    text = ''.join(kept) if kept else text
+        para = ''.join(kept) if kept else para
 
-    # === 第二层：模式替换 ===
+        # === 第二层：模式替换 ===
 
-    # 2a. "（注/提示/注意/ps：...）" → 去括号保留内容
-    # 前面是标点或行首，直接追加；否则加逗号衔接
-    text = re.sub(
-        r'([。！？\n])\s*[（(]\s*(?:注|提示|注意|ps|p\.s\.)[：:]\s*([^）)]*)[）)]',
-        r'\1\2', text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r'([^。！？\n\s])[（(]\s*(?:注|提示|注意|ps|p\.s\.)[：:]\s*([^）)]*)[）)]',
-        r'\1，\2', text, flags=re.IGNORECASE,
-    )
+        # 2a. "（注/提示/注意/ps：...）" → 去括号保留内容
+        para = re.sub(
+            r'([。！？\n])\s*[（(]\s*(?:注|提示|注意|ps|p\.s\.)[：:]\s*([^）)]*)[）)]',
+            r'\1\2', para, flags=re.IGNORECASE,
+        )
+        para = re.sub(
+            r'([^。！？\n\s])[（(]\s*(?:注|提示|注意|ps|p\.s\.)[：:]\s*([^）)]*)[）)]',
+            r'\1，\2', para, flags=re.IGNORECASE,
+        )
 
-    # 2b. 普通内容括号 → 去括号融入句子（仅处理 6 字以上信息备注，保留短标签）
-    text = re.sub(
-        r'([。！？\n])\s*[（(]([^（）()]{6,80})[）)]',
-        r'\1\2', text,
-    )
-    text = re.sub(
-        r'([^。！？\n\s])[（(]([^（）()]{6,80})[）)]',
-        r'\1，\2', text,
-    )
+        # 2b. 普通内容括号 → 去括号融入句子（仅处理 6 字以上信息备注，保留短标签）
+        para = re.sub(
+            r'([。！？\n])\s*[（(]([^（）()]{6,80})[）)]',
+            r'\1\2', para,
+        )
+        para = re.sub(
+            r'([^。！？\n\s])[（(]([^（）()]{6,80})[）)]',
+            r'\1，\2', para,
+        )
 
-    # 2c. 论文式衔接词
-    text = _ACADEMIC_TRANSITION_RE.sub('', text)
-    text = _ALSO_TRANSITION_RE.sub('', text)
+        # 2c. 论文式衔接词
+        para = _ACADEMIC_TRANSITION_RE.sub('', para)
+        para = _ALSO_TRANSITION_RE.sub('', para)
 
-    # 2d. "第X步是" → "X. "
-    text = _STEP_PREFIX_RE.sub(r'\1. ', text)
+        # 2d. "第X步是" → "X. "
+        para = _STEP_PREFIX_RE.sub(r'\1. ', para)
 
-    # 2e. 段落级"首先，"/"其次，"/"最后，" → 移除
-    text = re.sub(r'^\s*首先[，,]\s*', '', text)
-    text = re.sub(r'([。！？]\s*)(?:其次|最后)[，,]\s*', r'\1', text)
+        # 2e. 段落级"首先，"/"其次，"/"最后，" → 移除
+        para = re.sub(r'^\s*首先[，,]\s*', '', para)
+        para = re.sub(r'([。！？]\s*)(?:其次|最后)[，,]\s*', r'\1', para)
+
+        processed_paras.append(para)
+
+    if total_removed > 0:
+        logger.info("[去AI味] 移除了 %d 句AI填充句", total_removed)
+
+    text = '\n\n'.join(processed_paras) if processed_paras else text
 
     # === 第三层：清理多余空白 ===
     text = re.sub(r'([。！？])\1+', r'\1', text)      # 连续标点去重
     text = re.sub(r'\n{3,}', '\n\n', text)             # 多余空行折叠
-    text = re.sub(r'  +', ' ', text)                   # 多余空格
+    text = re.sub(r'[ \t]{2,}', ' ', text)             # 多余水平空格（不触碰换行）
 
     return text.strip()

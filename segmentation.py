@@ -244,6 +244,22 @@ def _split_long_para(text: str) -> list:
     """将单个长段落按句子均分成 ~200 字的子段落"""
     sentences = [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
     if len(sentences) <= 2:
+        # 句子虽少但文本很长 → 按逗号/分号做子句切分再分组
+        if len(text) > _CHARS_PER_PARA:
+            sub_clauses = re.split(r'(?<=[，,；;])\s*', text)
+            if len(sub_clauses) >= 4:
+                total = len(text)
+                n = max(2, min(_MAX_PARAS, total // _CHARS_PER_PARA))
+                size = max(1, len(sub_clauses) // n)
+                paras = []
+                for i in range(n):
+                    start = i * size
+                    end = len(sub_clauses) if i == n - 1 else start + size
+                    para = ''.join(sub_clauses[start:end])
+                    if para:
+                        paras.append(para)
+                if len(paras) >= 2:
+                    return paras
         return [text]
 
     total = sum(len(s) for s in sentences)
