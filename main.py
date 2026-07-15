@@ -16,7 +16,8 @@ class LanguageLogicOptimizer(Star):
     3. 过滤系统路径 / 指令等敏感信息
     4. 删除工具调用过程叙述句
     5. 残存工具函数名 → 自然语言
-    6. 长文本强制智能分段
+    6. 正则去AI味（清除公式化表达）
+    7. 长文本智能分段/文风优化
     """
 
     def __init__(self, context: Context):
@@ -44,13 +45,16 @@ class LanguageLogicOptimizer(Star):
                     original = comp.text
                     text = original
 
-                    # ============ 六道处理管线 ============
+                    # ============ 七道处理管线 ============
                     text = self._clean_garbage(text)            # ①
                     text = self._replace_user(text)             # ②
                     text = self._filter_sensitive(text)         # ③
                     text = self._remove_tool_narration(text)    # ④
                     text = self._deidentify_tool_names(text)    # ⑤
-                    # ⑥ 分段/文风优化（LLM 文风 > LLM 分段 > 规则）
+                    # ⑥ 去AI味（正则清除公式化表达）
+                    if self._get_config("enable_de_ai_flavor", True):
+                        text = self._de_ai_flavor(text)
+                    # ⑦ 分段/文风优化（LLM 文风 > LLM 分段 > 规则）
                     text = await self._apply_segmentation_and_style(text)
                     # =====================================
 
@@ -346,7 +350,137 @@ class LanguageLogicOptimizer(Star):
         return result
 
     # ============================================================
-    #  ⑥ 智能分段（LLM 优先 → 规则降级）
+    #  ⑥ 去AI味 — 正则清除高频AI公式化表达
+    # ============================================================
+
+    # 高置信度AI填充句——可整句安全删除（纯结构性胶水，不含信息）
+    _AI_FILLER_PATTERNS = [
+        re.compile(r'^我这就把.{0,20}(?:整理|梳理|列出|总结|归纳).{0,10}[：:]?$'),
+        re.compile(r'^我来[给帮为].{0,15}(?:梳理|整理|介绍|说明|解释).{0,10}[：:]?$'),
+        re.compile(r'^接下来[我让].{0,15}(?:介绍|说明|解释|展开|讲讲).{0,10}[：:]?$'),
+        re.compile(r'^以下是.{0,10}[：:]?$'),
+        re.compile(r'^下面[我让].{0,10}(?:说说|讲讲|介绍)[：:]?$'),
+        re.compile(r'^让我[们]?.{0,10}(?:看看|聊聊|说说|展开)[：:]?$'),
+        re.compile(r'^以上就是.{0,20}[。！]?$'),
+        re.compile(r'^总结一下[：:,，]?$'),
+        re.compile(r'^总的[来说而言]{1,2}[：:,，]?$'),
+    ]
+
+    # AI填充前缀——紧接内容时剥离前缀、保留正文
+    _AI_FILLER_PREFIXES = [
+        (re.compile(r'^我这就把.{0,20}(?:整理|梳理|列出|总结|归纳).{0,10}[：:]\s*'), ''),
+        (re.compile(r'^我来[给帮为].{0,15}(?:梳理|整理|介绍|说明|解释).{0,10}[：:]\s*'), ''),
+        (re.compile(r'^接下来[我让].{0,15}(?:介绍|说明|解释|展开|讲讲).{0,10}[：:]\s*'), ''),
+        (re.compile(r'^以下是.{0,10}[：:]\s*'), ''),
+        (re.compile(r'^下面[我让].{0,10}(?:说说|讲讲|介绍)[：:]\s*'), ''),
+        (re.compile(r'^让我[们]?.{0,10}(?:看看|聊聊|说说|展开)[：:]\s*'), ''),
+    ]
+
+    # 论文式衔接词（句首匹配，移除后不影响语义）
+    _ACADEMIC_TRANSITION_RE = re.compile(
+        r'(?:^|[。！？]\s*)(?:值得注意的是|需要提醒的是|需要说明的是|需要注?意的?是)[：:,，]?\s*'
+    )
+    _ALSO_TRANSITION_RE = re.compile(
+        r'(?:^|[。！？]\s*)(?:此外|另外|顺便[一]?提|补充[一]?点)[：:,，]?\s*'
+    )
+
+    # "第X步是" 前缀
+    _STEP_PREFIX_RE = re.compile(r'第([一二三四五六七八九十\d]+)步是\s*')
+
+    @classmethod
+    def _is_ai_filler(cls, sentence: str) -> bool:
+        """判断句子是否为纯AI填充句（可安全删除，不影响信息完整性）"""
+        stripped = sentence.strip()
+        for pat in cls._AI_FILLER_PATTERNS:
+            if pat.match(stripped):
+                return True
+        return False
+
+    @classmethod
+    def _strip_ai_prefix(cls, sentence: str) -> str:
+        """剥离句首AI填充前缀，保留后续正文"""
+        for pat in cls._AI_FILLER_PREFIXES:
+            m = pat.match(sentence)
+            if m:
+                return sentence[m.end():]
+        return sentence
+
+    @classmethod
+    def _de_ai_flavor(cls, text: str) -> str:
+        """
+        ⑥ 去AI味 —— 正则清除高频AI公式化表达。
+        三层策略：
+          第一层：逐句处理（整句删除纯填充句 / 剥离前缀保留正文）
+          第二层：模式替换（去括号、去论文衔接词、去"第X步是"前缀）
+          第三层：清理多余空白
+        """
+        # === 第一层：逐句处理 ===
+        sentences = re.split(r'(?<=[。！？\n])\s*', text)
+        kept = []
+        removed_count = 0
+        for sent in sentences:
+            stripped = sent.strip()
+            if not stripped:
+                continue
+            # 1a. 纯填充句 → 整句删除
+            if cls._is_ai_filler(stripped):
+                removed_count += 1
+                continue
+            # 1b. 填充前缀 → 剥离前缀，保留正文
+            stripped = cls._strip_ai_prefix(stripped)
+            kept.append(stripped)
+
+        if removed_count > 0:
+            logger.info(f"[去AI味] 移除了 {removed_count} 句AI填充句")
+
+        text = ''.join(kept) if kept else text
+
+        # === 第二层：模式替换 ===
+
+        # 2a. "（注/提示/注意/ps：...）" → 去括号保留内容
+        # 前面是标点或行首，直接追加；否则加逗号衔接
+        text = re.sub(
+            r'([。！？\n])\s*[（(]\s*(?:注|提示|注意|ps|p\.s\.)[：:]\s*([^）)]*)[）)]',
+            r'\1\2', text, flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r'([^。！？\n\s])[（(]\s*(?:注|提示|注意|ps|p\.s\.)[：:]\s*([^）)]*)[）)]',
+            r'\1，\2', text, flags=re.IGNORECASE,
+        )
+
+        # 2b. 普通内容括号 → 去括号融入句子（仅处理 6 字以上信息备注，保留短标签）
+        text = re.sub(
+            r'([。！？\n])\s*[（(]([^（）()]{6,80})[）)]',
+            r'\1\2', text,
+        )
+        text = re.sub(
+            r'([^。！？\n\s])[（(]([^（）()]{6,80})[）)]',
+            r'\1，\2', text,
+        )
+
+        # 2c. 论文式衔接词
+        text = cls._ACADEMIC_TRANSITION_RE.sub('', text)
+        text = cls._ALSO_TRANSITION_RE.sub('', text)
+
+        # 2d. "第X步是" → "X. "
+        text = cls._STEP_PREFIX_RE.sub(r'\1. ', text)
+
+        # 2e. 段落级"首先，"/"其次，"/"最后，" → 移除
+        text = re.sub(r'^\s*首先[，,]\s*', '', text)
+        text = re.sub(r'([。！？]\s*)(?:其次|最后)[，,]\s*', r'\1', text)
+
+        # === 第三层：清理多余空白 ===
+        # 移除可能因删除产生的连续标点
+        text = re.sub(r'([。！？])\1+', r'\1', text)
+        # 移除被掏空后留下的空行
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        # 清理多余空格
+        text = re.sub(r'  +', ' ', text)
+
+        return text.strip()
+
+    # ============================================================
+    #  ⑦ 智能分段（LLM 优先 → 规则降级）
     # ============================================================
 
     _SENTENCE_SPLIT = re.compile(r'(?<=[。！？])\s*')
@@ -363,9 +497,9 @@ class LanguageLogicOptimizer(Star):
 
     _SEGMENT_PROMPT = (
         "按语义将文本分段，用\\n\\n分隔后输出：\n"
-        "- 开头寒暄/回应 → 首段\n"
-        "- 正文按话题自然分组：独立话题块各自成段，相关内容归为一段\n"
-        "- 收尾/关怀 → 末段\n"
+        "- 按话题的自然转换处分段，不要强行分成\"开场\"\"正文\"\"收尾\"\n"
+        "- 一个话题说完了就换段，无论这段有多短\n"
+        "- 密集信息部分可以适当多分几段，让阅读更轻松\n"
         "通常3~5段，原文>600字可扩至6段。若含无关话题用\\n---\\n分隔。\n"
         "严禁修改任何一个字、标点、语气词、emoji——仅调整分段和换行，不改原文内容。只输出结果。\n\n"
         "原文：\n{text}"
@@ -374,25 +508,25 @@ class LanguageLogicOptimizer(Star):
     # ---- LLM 文风优化提示词 ----
 
     _STYLE_PROMPT = (
-        "优化以下文本的结构和可读性。\n\n"
+        "将以下文本改写成更自然、更像真人随口聊天的风格。\n\n"
         "【硬约束——必须严格遵守】\n"
         "1. 人设不变：语气、口头禅、emoji、称呼方式完全保留，不改动任何一个体现性格的词\n"
         "2. 内容不变：原文所有信息必须保留，不添加原文没有的事实或建议\n"
         "3. 语义不变：每句话的原意不能有任何偏差\n\n"
-        "【输出结构】\n"
-        "- 第1段（开场）：寒暄/回应/引入话题\n"
-        "- 中间1~3段（正文）：核心内容。如有操作步骤/方法/要点，用序号分行：\n"
-        "  1. 第一步内容\n"
-        "  2. 第二步内容\n"
-        "  同类步骤放在同一段内，不同主题拆到不同段\n"
-        "- 最后1段（收尾）：总结/关怀/温馨收尾\n"
-        "- 总共不超过5段，段与段之间用空行分隔\n\n"
-        "【润色范围——仅在不违背硬约束时执行】\n"
-        "- 过长句子适当拆短，让阅读更轻松\n"
-        "- 去除重复啰嗦的表述\n"
-        "- 段落内信息密度尽量均衡\n\n"
+        "【去AI味——必须执行】\n"
+        "1. 禁止使用任何AI开场白和过渡句，如\"我来给你整理一下\"\"我这就把...列出来\"\"接下来是...\"\"以下是...\"\"让我为你展开说说\"等\n"
+        "2. 禁止使用\"（括号备注）\"——所有补充信息必须融入句子自然表达，不能用括号附加说明\n"
+        "3. 禁止使用\"首先...其次...最后...\"\"第一...第二...\"等论文式衔接词。操作步骤可保留序号（1. 2. 3.），但不要加\"第一步是\"等冗长引导\n"
+        "4. 禁止使用\"值得注意的是\"\"需要提醒的是\"\"此外\"\"另外\"\"顺便一提\"\"补充一点\"等教科书过渡词\n"
+        "5. 不要强行制造\"开场寒暄→正文→收尾关怀\"的三段式结构。像真人聊天一样想到哪说到哪，自然开始、自然结束\n"
+        "6. 如果原文结尾已经表达了关心或收束的意思，不要额外再追加\"如果还有什么想了解的随时问我\"\"希望能帮到你\"等AI常用收尾句\n\n"
+        "【输出风格——尽量贴近真人】\n"
+        "- 像朋友之间随口分享，不要像写文章或写教程\n"
+        "- 句子长短错落，不要每句话都差不多长\n"
+        "- 段落自然断开即可，不需要每段都写成完整的\"小块\"\n"
+        "- 可以一句话一段，也可以一段说很多句——完全按语感来\n\n"
         "【输出格式】\n"
-        "只输出优化后的文本。不要加任何前缀、后缀或解释。\n\n"
+        "只输出改写后的文本。不要加任何前缀、后缀或解释。\n\n"
         "原文：\n{text}"
     )
 
@@ -526,15 +660,8 @@ class LanguageLogicOptimizer(Star):
                 )
                 return None
 
-            # 验证段数：不应超过 _MAX_PARAS + 1（给 LLM 一点弹性）
             para_count = len([p for p in result.split('\n\n') if p.strip()])
-            if para_count > self._MAX_PARAS + 1:
-                logger.warning(
-                    f"[LLM文风] 段数过多（{para_count} > {self._MAX_PARAS + 1}），降级到下一级"
-                )
-                return None
-
-            logger.info(f"[LLM文风] ✓ 结构化重组完成，{para_count} 段")
+            logger.info(f"[LLM文风] ✓ 文风优化完成，{para_count} 段")
             return result
 
         except Exception as e:
@@ -618,13 +745,23 @@ class LanguageLogicOptimizer(Star):
         """
         改进的规则分段：
         1. 短文本不处理
-        2. 按已有空行先拆段，尊重 LLM/用户手动分段
-        3. 对超长段落进一步细分（列表块除外）
-        4. 段数不足时拆分最长段；段数超限时合并最短段
-        5. 最终目标：3~5 段
+        2. 密集文本（无换行）在小节标题前自动插入段落分隔
+        3. 按已有空行拆段，尊重 LLM/用户手动分段
+        4. 对超长段落进一步细分（列表块除外）
+        5. 段数不足时拆分最长段；段数超限时合并最短段
+        6. 最终目标：3~5 段
         """
         if len(text) <= cls._SEGMENT_THRESHOLD:
             return text
+
+        # ---- 预处理：密集文本的段落拆分 ----
+        # LLM 经常输出无换行的纯空格分隔文本，必须在小节标题前强制插入分隔
+        # 匹配："。 准备材料：YY" → "。\n\n准备材料：YY"（仅当后续是 2~12 字短标题+冒号）
+        if text.count('\n') <= 2:
+            text = re.sub(
+                r'([。！？：])\s+(?=[^\s。！？：]{2,12}：)',
+                r'\1\n\n', text
+            )
 
         # ---- 预处理：单换行规范化 ----
         # 把 "句子结束。\n下一段" 提升为 "\n\n"（真正的段落分隔）

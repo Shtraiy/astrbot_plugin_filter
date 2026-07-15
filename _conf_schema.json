@@ -18,6 +18,12 @@
     "hint": "开启后使用 LLM 进行语义分段，关闭则使用纯规则分段",
     "default": false
   },
+  "enable_de_ai_flavor": {
+    "description": "启用正则去AI味",
+    "type": "bool",
+    "hint": "开启后使用正则表达式清除高频AI公式化表达（如\"我来整理一下\"\"以下是...\"\"（括号备注）\"等）。建议保持开启。",
+    "default": true
+  },
   "multi_message": {
     "description": "多消息逐段发送",
     "type": "bool",
