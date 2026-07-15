@@ -29,6 +29,7 @@ _SEGMENT_PROMPT = (
     "- 按话题的自然转换处分段，不要强行分成\"开场\"\"正文\"\"收尾\"\n"
     "- 一个话题说完了就换段，无论这段有多短\n"
     "- 密集信息部分可以适当多分几段，让阅读更轻松\n"
+    "- 严禁让任何段落以冒号（：）结尾——冒号后面必须紧跟它引出的内容，不能分段\n"
     "通常3~5段，原文>600字可扩至6段。若含无关话题用\\n---\\n分隔。\n"
     "严禁修改任何一个字、标点、语气词、emoji——仅调整分段和换行，不改原文内容。只输出结果。\n\n"
     "原文：\n{text}"
@@ -51,7 +52,8 @@ _STYLE_PROMPT = (
     "- 像朋友之间随口分享，不要像写文章或写教程\n"
     "- 句子长短错落，不要每句话都差不多长\n"
     "- 段落自然断开即可，不需要每段都写成完整的\"小块\"\n"
-    "- 可以一句话一段，也可以一段说很多句——完全按语感来\n\n"
+    "- 可以一句话一段，也可以一段说很多句——完全按语感来\n"
+    "- 严禁让任何段落以冒号（：）结尾——冒号后面必须紧跟它引出的内容，不能分段\n\n"
     "【输出格式】\n"
     "只输出改写后的文本。不要加任何前缀、后缀或解释。\n\n"
     "原文：\n{text}"
@@ -192,6 +194,32 @@ async def try_llm_style_optimize(text: str, context, get_config) -> str | None:
 
 
 # ============================================================
+#  后处理：合并冒号结尾的孤立段落
+# ============================================================
+
+def _merge_orphan_colons(text: str) -> str:
+    """合并以冒号结尾的段落到下一段。冒号天然是引出符，独立成段会割裂。"""
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    if len(paragraphs) < 2:
+        return text
+
+    merged = []
+    skip_next = False
+    for i, para in enumerate(paragraphs):
+        if skip_next:
+            skip_next = False
+            continue
+        if (i < len(paragraphs) - 1
+                and para.rstrip().endswith(('：', ':'))):
+            merged.append(para.rstrip() + '\n' + paragraphs[i + 1].lstrip())
+            skip_next = True
+        else:
+            merged.append(para)
+
+    return '\n\n'.join(merged)
+
+
+# ============================================================
 #  分段/文风统一入口
 # ============================================================
 
@@ -204,13 +232,13 @@ async def apply_segmentation_and_style(text: str, context, get_config) -> str:
     result = await try_llm_style_optimize(text, context, get_config)
     if result:
         logger.info("[分段/文风] 使用 LLM 文风优化")
-        return result
+        return _merge_orphan_colons(result)
 
     # 2) LLM 语义分段
     result = await try_llm_segment(text, context, get_config)
     if result:
         logger.info("[分段/文风] 使用 LLM 语义分段")
-        return result
+        return _merge_orphan_colons(result)
 
     # 3) 规则分段
     logger.info("[分段/文风] 使用规则分段")
@@ -342,7 +370,8 @@ def _segment_text(text: str) -> str:
         result[left] = result[left] + '\n' + result[right]
         result.pop(right)
 
-    # 合并孤立的过渡句：短句（≤80字）以冒号结尾 → 跟下一段合并
+    # 合并孤立的过渡句：以冒号结尾 → 跟下一段合并
+    # 冒号天然是引出符，独立成段会割裂，无论段落多长都应合并
     # 避免 "除此以外，她还唱过很多歌哦：\n\n比如..." 的割裂感
     merged = []
     skip_next = False
@@ -352,9 +381,8 @@ def _segment_text(text: str) -> str:
             continue
         stripped = para.rstrip()
         if (i < len(result) - 1
-                and len(stripped) <= 80
                 and stripped.endswith(('：', ':'))
-                and '\n' not in stripped):  # 纯单行过渡句，不含内部换行
+                and '\n' not in stripped):  # 纯单行，不含内部换行
             merged.append(stripped + '\n' + result[i + 1].lstrip())
             skip_next = True
         else:
