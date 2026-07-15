@@ -24,6 +24,30 @@
     "hint": "开启后使用正则表达式清除高频AI公式化表达（如\"我来整理一下\"\"以下是...\"\"（括号备注）\"等）。建议保持开启。",
     "default": true
   },
+  "enable_image_render": {
+    "description": "启用图片渲染",
+    "type": "bool",
+    "hint": "检测到结构化列表（如追番列表、食谱步骤等编号内容）时自动渲染为图片发送，避免 QQ 气泡排版错乱。需要 pip install Pillow。",
+    "default": false
+  },
+  "image_min_list_items": {
+    "description": "触发图片渲染的最小编号行数",
+    "type": "int",
+    "hint": "文本包含 >= 此数量的编号列表行时触发图片渲染。建议 3~5。",
+    "default": 3
+  },
+  "image_font_size": {
+    "description": "图片字号（px）",
+    "type": "int",
+    "hint": "渲染图片使用的字号。",
+    "default": 22
+  },
+  "image_max_width": {
+    "description": "图片最大宽度（px）",
+    "type": "int",
+    "hint": "渲染图片的最大宽度，超出自动换行。",
+    "default": 600
+  },
   "multi_message": {
     "description": "多消息逐段发送",
     "type": "bool",
