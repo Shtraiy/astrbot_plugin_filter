@@ -249,6 +249,17 @@ _INTERNAL_IP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# URL / 域名（防止 LLM 泄露内部服务地址）
+# 匹配完整 URL（http/https）或裸域名（含端口/路径）
+_URL_RE = re.compile(
+    r'\b(?:https?://)?'
+    r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+'
+    r'[a-zA-Z]{2,}'
+    r'(?::\d+)?'
+    r'(?:/[^\s。，！？、""''）\)】]*(?:\?[^\s。，！？、""''）\)】]*)?(?:#[^\s。，！？、""''）\)】]*)?)?',
+    re.IGNORECASE,
+)
+
 # 进程列表 / 数据库 等系统信息行
 _SYSTEM_INFO_LINE_RE = re.compile(
     r'(?:进程列表|运行进程|后台进程|数据库连接|配置文件|'
@@ -259,7 +270,10 @@ _SYSTEM_INFO_LINE_RE = re.compile(
 
 
 def filter_sensitive(text: str) -> str:
-    """过滤系统路径、命令行、内部 IP 等敏感信息"""
+    """过滤系统路径、命令行、内部 IP、URL/域名 等敏感信息"""
+    # URL/域名必须在路径过滤之前，否则 https://example.com/path 的路径部分
+    # 会被 _SYSTEM_PATH_RE 先吃掉，导致 URL 匹配残废
+    text = _URL_RE.sub('[链接]', text)
     text = _SYSTEM_PATH_RE.sub('', text)
     text = _SHELL_CMD_RE.sub('', text)
     text = _INTERNAL_IP_RE.sub('', text)

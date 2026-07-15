@@ -198,23 +198,30 @@ async def try_llm_style_optimize(text: str, context, get_config) -> str | None:
 # ============================================================
 
 def _merge_orphan_colons(text: str) -> str:
-    """合并以冒号结尾的段落到下一段。冒号天然是引出符，独立成段会割裂。"""
+    """合并以冒号结尾的段落到下一段。冒号天然是引出符，独立成段会割裂。
+    支持级联合并：连续多段以冒号结尾时，会一直合并到非冒号段为止。
+    首段要求是单行过渡句（不含内部换行），防止误合并含换行的长段落；
+    但一旦开始合并后，级联不再检查换行，只根据冒号结尾继续向后。"""
     paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
     if len(paragraphs) < 2:
         return text
 
     merged = []
-    skip_next = False
-    for i, para in enumerate(paragraphs):
-        if skip_next:
-            skip_next = False
-            continue
-        if (i < len(paragraphs) - 1
-                and para.rstrip().endswith(('：', ':'))):
-            merged.append(para.rstrip() + '\n' + paragraphs[i + 1].lstrip())
-            skip_next = True
-        else:
-            merged.append(para)
+    i = 0
+    while i < len(paragraphs):
+        para = paragraphs[i]
+        first_merge = True
+        # 级联合并：累积段以冒号结尾就继续向后合并
+        while (i < len(paragraphs) - 1
+               and para.rstrip().endswith(('：', ':'))):
+            # 首段必须是单行过渡句，避免误合并含内部换行的长段落
+            if first_merge and '\n' in para:
+                break
+            i += 1
+            para = para.rstrip() + '\n' + paragraphs[i].lstrip()
+            first_merge = False
+        merged.append(para)
+        i += 1
 
     return '\n\n'.join(merged)
 
@@ -370,23 +377,25 @@ def _segment_text(text: str) -> str:
         result[left] = result[left] + '\n' + result[right]
         result.pop(right)
 
-    # 合并孤立的过渡句：以冒号结尾 → 跟下一段合并
-    # 冒号天然是引出符，独立成段会割裂，无论段落多长都应合并
+    # 合并孤立的过渡句：以冒号结尾 → 级联向后合并
+    # 冒号天然是引出符，独立成段会割裂。首段要求单行，一旦开始合并则级联到底。
     # 避免 "除此以外，她还唱过很多歌哦：\n\n比如..." 的割裂感
     merged = []
-    skip_next = False
-    for i, para in enumerate(result):
-        if skip_next:
-            skip_next = False
-            continue
+    i = 0
+    while i < len(result):
+        para = result[i]
         stripped = para.rstrip()
-        if (i < len(result) - 1
-                and stripped.endswith(('：', ':'))
-                and '\n' not in stripped):  # 纯单行，不含内部换行
-            merged.append(stripped + '\n' + result[i + 1].lstrip())
-            skip_next = True
-        else:
-            merged.append(para)
+        first_merge = True
+        while (i < len(result) - 1
+               and stripped.endswith(('：', ':'))):
+            if first_merge and '\n' in stripped:
+                break  # 含内部换行的长段落，即使以冒号结尾也不合并
+            i += 1
+            para = stripped + '\n' + result[i].lstrip()
+            stripped = para.rstrip()
+            first_merge = False
+        merged.append(para)
+        i += 1
     result = merged
 
     return '\n\n'.join(result)
