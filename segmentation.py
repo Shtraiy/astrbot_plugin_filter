@@ -227,6 +227,32 @@ def _merge_orphan_colons(text: str) -> str:
 
 
 # ============================================================
+#  密集条目拆分：完结番剧列表等
+# ============================================================
+
+# 检测模式：。后紧跟 番剧名（第X季）： 的组合
+_DENSE_ENTRY_BREAK_RE = re.compile(
+    r'(?<=[。！？])'
+    r'(?='
+    r'[^\s。！？]{2,20}'
+    r'[（(][^）)]*季[）)]'
+    r'[：:]'
+    r')'
+)
+
+
+def _split_dense_entries(text: str) -> str:
+    """检测密集的完结番剧类条目段落，在每个 。+番剧名 边界处插入换行。
+    仅当段落含 ≥3 个 （第X季） 模式条目时才触发，避免误拆正常叙事。"""
+    # 预检：是否含足够多的 "（第X季）" 模式
+    season_count = len(re.findall(r'[（(][^）)]*季[）)]', text))
+    if season_count < 3:
+        return text
+    # 在每个 。后紧跟番剧名的位置插入 \\n，拆成每行一条
+    return _DENSE_ENTRY_BREAK_RE.sub(r'\n', text)
+
+
+# ============================================================
 #  分段/文风统一入口
 # ============================================================
 
@@ -328,9 +354,11 @@ def _segment_text(text: str) -> str:
     1. 短文本不处理
     2. 密集文本（无换行）在小节标题前自动插入段落分隔
     3. 按已有空行拆段，尊重 LLM/用户手动分段
-    4. 对超长段落进一步细分（列表块除外）
-    5. 段数不足时拆分最长段；段数超限时合并最短段
-    6. 最终目标：3~5 段
+    4. 密集条目拆分（完结番剧列表等）
+    5. 对超长段落进一步细分（列表块除外）
+    6. 冒号标题向前合并（优先于长度合并）
+    7. 段数不足时拆分最长段；段数超限时合并最短段
+    8. 最终目标：3~5 段
     """
     if len(text) <= SEGMENT_THRESHOLD and text.count('\n\n') < 2:
         return text
@@ -349,9 +377,11 @@ def _segment_text(text: str) -> str:
     # 按已有空行拆段
     raw = [p.strip() for p in text.split('\n\n') if p.strip()]
 
-    # 处理每段：超长且非列表 → 细分
+    # 处理每段：密集条目拆分 + 超长细分（列表块除外）
     result = []
     for para in raw:
+        # 密集完结条目 → 每行一条
+        para = _split_dense_entries(para)
         if len(para) <= _CHARS_PER_PARA or _is_list_block(para):
             result.append(para)
         else:
@@ -364,9 +394,18 @@ def _segment_text(text: str) -> str:
         subs = _split_long_para(longest)
         result[longest_idx:longest_idx] = subs
 
-    # 段数超限（>_MAX_PARAS）→ 合并最短段到较短邻居
+    # ---- 冒号合并（在长度合并之前，确保冒号标题向前关联到正文） ----
+    text = _merge_orphan_colons('\n\n'.join(result))
+    result = [p.strip() for p in text.split('\n\n') if p.strip()]
+
+    # 段数超限（>_MAX_PARAS）→ 优先合并单行短段落，保护多行结构化条目
     while len(result) > _MAX_PARAS:
-        i = min(range(len(result)), key=lambda i: len(result[i]))
+        # 优先选最短的单行段落（标题/过渡句），多行结构化条目合并代价更高
+        single_line_indices = [i for i, p in enumerate(result) if '\n' not in p]
+        if single_line_indices:
+            i = min(single_line_indices, key=lambda i: len(result[i]))
+        else:
+            i = min(range(len(result)), key=lambda i: len(result[i]))
         if i == 0:
             j = 1
         elif i == len(result) - 1:
@@ -376,26 +415,5 @@ def _segment_text(text: str) -> str:
         left, right = (i, j) if i < j else (j, i)
         result[left] = result[left] + '\n' + result[right]
         result.pop(right)
-
-    # 合并孤立的过渡句：以冒号结尾 → 级联向后合并
-    # 冒号天然是引出符，独立成段会割裂。首段要求单行，一旦开始合并则级联到底。
-    # 避免 "除此以外，她还唱过很多歌哦：\n\n比如..." 的割裂感
-    merged = []
-    i = 0
-    while i < len(result):
-        para = result[i]
-        stripped = para.rstrip()
-        first_merge = True
-        while (i < len(result) - 1
-               and stripped.endswith(('：', ':'))):
-            if first_merge and '\n' in stripped:
-                break  # 含内部换行的长段落，即使以冒号结尾也不合并
-            i += 1
-            para = stripped + '\n' + result[i].lstrip()
-            stripped = para.rstrip()
-            first_merge = False
-        merged.append(para)
-        i += 1
-    result = merged
 
     return '\n\n'.join(result)
