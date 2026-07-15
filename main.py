@@ -399,7 +399,7 @@ class LanguageLogicOptimizer(Star):
     @classmethod
     def _strip_ai_prefix(cls, sentence: str) -> str:
         """剥离句首AI填充前缀，保留后续正文"""
-        for pat in cls._AI_FILLER_PREFIXES:
+        for pat, _ in cls._AI_FILLER_PREFIXES:
             m = pat.match(sentence)
             if m:
                 return sentence[m.end():]
