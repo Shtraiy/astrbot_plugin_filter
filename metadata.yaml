@@ -1,7 +1,7 @@
-name: astrbot_plugin_filter # 插件唯一识别名，以 astrbot_plugin_ 前缀开头
-display_name: 语言逻辑优化大师 # 用于展示的名字
-desc: 综合优化 AstrBot 输出文本 — 清洗元数据、工具名脱敏、LLM 文风优化/智能分段长文本。 # 插件简短描述
-version: 2.6.0 # 插件版本号。格式：1.1.1 或者 1.1
-author: Shtraiy # 作者
-repo: https://github.com/Shtraiy/astrbot_plugin_filter # 插件的仓库地址
-astrbot_version: ">=4.16,<5" # 兼容的 AstrBot 版本范围（_special: select_provider 需要 >=4.0.0；LLM 分段/文风优化需要 >=4.5.7）
+name: astrbot_plugin_filter
+display_name: "\u8bed\u8a00\u903b\u8f91\u4f18\u5316\u5927\u5e08"
+desc: "\u7efc\u5408\u4f18\u5316 AstrBot \u8f93\u51fa\u6587\u672c\uff0c\u6e05\u7406\u5143\u6570\u636e\u3001\u5de5\u5177\u540d\u548c\u654f\u611f\u4fe1\u606f\uff0c\u5e76\u652f\u6301 LLM \u6587\u98ce\u4f18\u5316\u3001\u667a\u80fd\u5206\u6bb5\u548c\u5217\u8868\u56fe\u7247\u6e32\u67d3\u3002"
+version: 2.6.1
+author: Shtraiy
+repo: https://github.com/Shtraiy/astrbot_plugin_filter
+astrbot_version: ">=4.16,<5"

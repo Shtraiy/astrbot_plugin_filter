@@ -1,411 +1,295 @@
-"""
-⑦ 智能分段 & 文风优化：LLM 优先 → 规则降级，以及多消息逐段发送。
-"""
+﻿"""Segmentation, style optimization, and multi-message sending."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import re
-import logging
+from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
-# ---- 规则分段常量 ----
-_SENTENCE_SPLIT = re.compile(r'(?<=[。！？])\s*')
-SEGMENT_THRESHOLD = 150       # 短于此值不处理
-_CHARS_PER_PARA = 300          # 目标每段字数
-_MAX_PARAS = 5                 # 最多段数
-
-# 列表行检测：编号 / 圆圈数字 / 符号前缀
-_LIST_LINE_RE = re.compile(
-    r'^\s*(?:\d+[\.\)、]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|[-•·▪▸►●○➤✓✅])\s'
+_SENTENCE_SPLIT = re.compile("(?<=[\u3002\uFF01\uFF1F])\\s*")
+SEGMENT_THRESHOLD = 150
+_CHARS_PER_PARA = 300
+_MAX_PARAS = 5
+_LIST_LINE_RE = re.compile(r"^\s*(?:\d+[\.\u3001\)\uFF09]|[\u2460-\u2469]|[-*])\s")
+_DEDUP_TOKEN_RE = re.compile(r"[\u4e00-\u9fff]+|[A-Za-z0-9_]+")
+_MENTION_PREFIX_RE = re.compile(r"^@.+?\s+")
+_QUOTED_ENTITY_RE = re.compile(r"\u300a([^\u300b]{1,40})\u300b")
+_DEDUP_NOISE_PHRASE_RE = re.compile(
+    r"(?:\u4e3a\u4e86|\u5e2e\u4f60|\u6211(?:\u8fd9\u5c31|\u5148|\u9700\u8981\u5148|\u9700\u8981|\u4f1a|\u6765|\u53bb)|"
+    r"\u6211\u4eec(?:\u5148|\u9700\u8981)|\u4e00\u4e0b|\u770b\u4e00\u4e0b|\u786e\u8ba4\u4e00\u4e0b|"
+    r"\u7a0d\u5fae|\u7a0d\u7b49|\u7b49\u6211|\u54e6|\u5566|\u5440|\u54c8|\u5462|\u7684|\u8fd9\u8fb9|\u624d\u884c)"
 )
-
-# ---- LLM 提示词 ----
-
+_DEDUP_NOISE_TOKENS = {
+    "\u4e3a\u4e86", "\u5e2e\u4f60", "\u6211", "\u8fd9\u5c31", "\u5148", "\u9700\u8981\u5148",
+    "\u9700\u8981", "\u4f1a", "\u6765", "\u53bb", "\u6211\u4eec", "\u4e00\u4e0b",
+    "\u770b\u4e00\u4e0b", "\u786e\u8ba4\u4e00\u4e0b", "\u7a0d\u5fae", "\u7a0d\u7b49",
+    "\u7b49\u6211", "\u54e6", "\u5566", "\u5440", "\u54c8", "\u5462", "\u7684",
+    "\u8fd9\u8fb9", "\u624d\u884c",
+}
+_PROCESS_MARKER_RE = re.compile(
+    r"(?:\u6211(?:\u8fd9\u5c31|\u5148|\u9700\u8981\u5148|\u9700\u8981|\u4f1a|\u6765|\u53bb)|"
+    r"\u4e3a\u4e86.*?(?:\u5e2e\u4f60|\u7ed9\u4f60)|\u7a0d\u7b49|\u7b49\u6211|"
+    r"\u786e\u8ba4|\u67e5\u770b|\u770b\u4e00\u4e0b|\u641c\u7d22|\u641c\u4e00\u4e0b|"
+    r"\u68c0\u7d22|\u67e5\u8be2|\u8ba2\u9605|\u7ba1\u7406\u8bf4\u660e\u4e66|\u871c\u67d1|Mikan)"
+)
 _SEGMENT_PROMPT = (
-    "按语义将文本分段，用\\n\\n分隔后输出：\n"
-    "- 按话题的自然转换处分段，不要强行分成\"开场\"\"正文\"\"收尾\"\n"
-    "- 一个话题说完了就换段，无论这段有多短\n"
-    "- 密集信息部分可以适当多分几段，让阅读更轻松\n"
-    "- 严禁让任何段落以冒号（：）结尾——冒号后面必须紧跟它引出的内容，不能分段\n"
-    "通常3~5段，原文>600字可扩至6段。若含无关话题用\\n---\\n分隔。\n"
-    "严禁修改任何一个字、标点、语气词、emoji——仅调整分段和换行，不改原文内容。只输出结果。\n\n"
-    "原文：\n{text}"
+    "??????????\\n\\n??????\n"
+    "- ????????????????????/??/????\n"
+    "- ????????????????????\n"
+    "- ????????????????????\n"
+    "- ??????????????????????????\n"
+    "- ??????????????? emoji??????????\n"
+    "??????\n\n"
+    "???\n{text}"
 )
-
 _STYLE_PROMPT = (
-    "将以下文本改写成更自然、更像真人随口聊天的风格。\n\n"
-    "【硬约束——必须严格遵守】\n"
-    "1. 人设不变：语气、口头禅、emoji、称呼方式完全保留，不改动任何一个体现性格的词\n"
-    "2. 内容不变：原文所有信息必须保留，不添加原文没有的事实或建议\n"
-    "3. 语义不变：每句话的原意不能有任何偏差\n\n"
-    "【去AI味——必须执行】\n"
-    "1. 禁止使用任何AI开场白和过渡句，如\"我来给你整理一下\"\"我这就把...列出来\"\"接下来是...\"\"以下是...\"\"让我为你展开说说\"等\n"
-    "2. 禁止使用\"（括号备注）\"——所有补充信息必须融入句子自然表达，不能用括号附加说明\n"
-    "3. 禁止使用\"首先...其次...最后...\"\"第一...第二...\"等论文式衔接词。操作步骤可保留序号（1. 2. 3.），但不要加\"第一步是\"等冗长引导\n"
-    "4. 禁止使用\"值得注意的是\"\"需要提醒的是\"\"此外\"\"另外\"\"顺便一提\"\"补充一点\"等教科书过渡词\n"
-    "5. 不要强行制造\"开场寒暄→正文→收尾关怀\"的三段式结构。像真人聊天一样想到哪说到哪，自然开始、自然结束\n"
-    "6. 如果原文结尾已经表达了关心或收束的意思，不要额外再追加\"如果还有什么想了解的随时问我\"\"希望能帮到你\"等AI常用收尾句\n\n"
-    "【输出风格——尽量贴近真人】\n"
-    "- 像朋友之间随口分享，不要像写文章或写教程\n"
-    "- 句子长短错落，不要每句话都差不多长\n"
-    "- 段落自然断开即可，不需要每段都写成完整的\"小块\"\n"
-    "- 可以一句话一段，也可以一段说很多句——完全按语感来\n"
-    "- 严禁让任何段落以冒号（：）结尾——冒号后面必须紧跟它引出的内容，不能分段\n\n"
-    "【输出格式】\n"
-    "只输出改写后的文本。不要加任何前缀、后缀或解释。\n\n"
-    "原文：\n{text}"
+    "?????????????????????????\n\n"
+    "?????\n"
+    "1. ??????????emoji??????????\n"
+    "2. ???????????????????????\n"
+    "3. ???? AI ????????????????????\n"
+    "4. ??????????????\n"
+    "???????????????\n\n"
+    "???\n{text}"
 )
 
-
-# ============================================================
-#  LLM 语义分段
-# ============================================================
 
 async def try_llm_segment(text: str, context, get_config) -> str | None:
-    """
-    尝试用 LLM 做语义分段。
-    成功返回分段后文本，失败返回 None（触发规则降级）。
-    注意：此函数的 LLM 调用失败不会影响主对话——插件会自动降级到规则分段。
-    """
-    if not get_config("enable_llm_segment"):
+    if not get_config("enable_llm_segment", False):
         return None
-
     provider_id = get_config("llm_provider_id", "")
-    if not provider_id:
-        logger.info("[LLM分段] 未配置 llm_provider_id，跳过。请在插件配置中选择 LLM 模型。")
+    if not provider_id or len(text) <= SEGMENT_THRESHOLD:
         return None
-
-    if len(text) <= SEGMENT_THRESHOLD:
-        return None
-
     try:
-        logger.info("[LLM分段] 正在调用 LLM（provider=%s）...", provider_id)
-        llm_resp = await context.llm_generate(
-            chat_provider_id=provider_id,
-            prompt=_SEGMENT_PROMPT.format(text=text),
-        )
-        result = llm_resp.completion_text.strip()
-
-        if not result:
-            logger.warning("[LLM分段] 返回空结果，降级到规则分段")
+        logger.info("[LLM ??] ?? provider=%s", provider_id)
+        llm_resp = await context.llm_generate(chat_provider_id=provider_id, prompt=_SEGMENT_PROMPT.format(text=text))
+        result = (getattr(llm_resp, "completion_text", "") or "").strip()
+        if not _is_llm_result_usable(text, result, tolerance=0.05):
             return None
-        if len(result) < len(text) * 0.3:
-            logger.warning("[LLM分段] 输出过短（可能截断），降级到规则分段")
-            return None
-
-        # 验证中文字数不得明显增减（允许 ±5%）
-        orig_han = len(re.findall(r'[一-鿿]', text))
-        result_han = len(re.findall(r'[一-鿿]', result))
-        if orig_han > 0 and abs(orig_han - result_han) > orig_han * 0.05:
-            logger.warning(
-                "[LLM分段] 原文内容被篡改（中文字数 %d → %d），降级到规则分段",
-                orig_han, result_han,
-            )
-            return None
-
-        # 检测无关话题混入
-        if '\n---\n' in result:
-            topic_count = result.count('\n---\n') + 1
-            logger.warning(
-                "[LLM分段] 检测到 %d 个无关话题混入。"
-                "建议检查 LLM 回复质量，避免无关内容混入用户回复。",
-                topic_count,
-            )
-            result = result.replace('\n---\n', '\n\n')
-
-        logger.info("[LLM分段] 语义分段完成")
-        return result
-
+        return result.replace("\n---\n", "\n\n")
     except Exception:
-        logger.warning(
-            "[LLM分段] LLM 调用失败（provider=%s），自动降级到规则分段。"
-            "这不影响主对话回复，仅分段功能回退。"
-            "如不需要 LLM 分段，可在配置中关闭 enable_llm_segment。",
-            provider_id, exc_info=True,
-        )
+        logger.warning("[LLM ??] ????????????", exc_info=True)
         return None
 
-
-# ============================================================
-#  LLM 文风优化
-# ============================================================
 
 async def try_llm_style_optimize(text: str, context, get_config) -> str | None:
-    """
-    尝试用 LLM 做结构化重组 + 文风润色。
-    成功返回优化后文本，失败返回 None（触发降级）。
-    """
-    enable = get_config("enable_llm_style", False)
+    if not get_config("enable_llm_style", False):
+        return None
     provider_id = get_config("llm_provider_id", "")
-
-    if not enable:
+    if not provider_id or len(text) <= SEGMENT_THRESHOLD:
         return None
-
-    if not provider_id:
-        logger.info("[LLM文风] 未配置 llm_provider_id，跳过。请在插件配置中选择 LLM 模型。")
-        return None
-
-    if len(text) <= SEGMENT_THRESHOLD:
-        return None
-
     try:
-        logger.info("[LLM文风] 正在调用 LLM（provider=%s）...", provider_id)
-        llm_resp = await context.llm_generate(
-            chat_provider_id=provider_id,
-            prompt=_STYLE_PROMPT.format(text=text),
-        )
-        result = llm_resp.completion_text.strip()
-        logger.info("[LLM文风] LLM 返回 %d 字符", len(result))
-
-        if not result:
-            logger.warning("[LLM文风] 返回空结果，降级到下一级")
+        logger.info("[LLM ??] ?? provider=%s", provider_id)
+        llm_resp = await context.llm_generate(chat_provider_id=provider_id, prompt=_STYLE_PROMPT.format(text=text))
+        result = (getattr(llm_resp, "completion_text", "") or "").strip()
+        if not _is_llm_result_usable(text, result, tolerance=0.10):
             return None
-        if len(result) < len(text) * 0.3:
-            logger.warning(
-                "[LLM文风] 输出过短（%d < %d），降级到下一级",
-                len(result), int(len(text) * 0.3),
-            )
-            return None
-
-        # 文风优化允许 ±10% 中文字数浮动
-        orig_han = len(re.findall(r'[一-鿿]', text))
-        result_han = len(re.findall(r'[一-鿿]', result))
-        if orig_han > 0 and abs(orig_han - result_han) > orig_han * 0.10:
-            logger.warning(
-                "[LLM文风] 内容偏差过大（中文字数 %d → %d），降级到下一级",
-                orig_han, result_han,
-            )
-            return None
-
-        para_count = len([p for p in result.split('\n\n') if p.strip()])
-        logger.info("[LLM文风] ✓ 文风优化完成，%d 段", para_count)
         return result
-
     except Exception:
-        logger.warning(
-            "[LLM文风] LLM 调用失败（provider=%s），自动降级到规则分段。"
-            "这不影响主对话回复。如不需要 LLM 文风优化，可在配置中关闭 enable_llm_style。",
-            provider_id, exc_info=True,
-        )
+        logger.warning("[LLM ??] ????????????", exc_info=True)
         return None
 
 
-# ============================================================
-#  后处理：合并冒号结尾的孤立段落
-# ============================================================
+def _is_llm_result_usable(original: str, result: str, tolerance: float) -> bool:
+    if not result or len(result) < len(original) * 0.3:
+        return False
+    orig_han = len(re.findall(r"[\u4e00-\u9fff]", original))
+    result_han = len(re.findall(r"[\u4e00-\u9fff]", result))
+    if orig_han > 0 and abs(orig_han - result_han) > orig_han * tolerance:
+        logger.warning("[LLM ??] ?????????%d -> %d", orig_han, result_han)
+        return False
+    return True
+
 
 def _merge_orphan_colons(text: str) -> str:
-    """合并以冒号结尾的段落到下一段。冒号天然是引出符，独立成段会割裂。
-    支持级联合并：连续多段以冒号结尾时，会一直合并到非冒号段为止。
-    首段要求是单行过渡句（不含内部换行），防止误合并含换行的长段落；
-    但一旦开始合并后，级联不再检查换行，只根据冒号结尾继续向后。"""
-    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     if len(paragraphs) < 2:
         return text
-
-    merged = []
+    merged: list[str] = []
     i = 0
     while i < len(paragraphs):
         para = paragraphs[i]
         first_merge = True
-        # 级联合并：累积段以冒号结尾就继续向后合并
-        while (i < len(paragraphs) - 1
-               and para.rstrip().endswith(('：', ':'))):
-            # 首段必须是单行过渡句，避免误合并含内部换行的长段落
-            if first_merge and '\n' in para:
+        while i < len(paragraphs) - 1 and para.rstrip().endswith(("\uFF1A", ":")):
+            if first_merge and "\n" in para:
                 break
             i += 1
-            para = para.rstrip() + '\n' + paragraphs[i].lstrip()
+            para = para.rstrip() + "\n" + paragraphs[i].lstrip()
             first_merge = False
         merged.append(para)
         i += 1
+    return "\n\n".join(merged)
 
-    return '\n\n'.join(merged)
 
-
-# ============================================================
-#  密集条目拆分：完结番剧列表等
-# ============================================================
-
-# 检测模式：。后紧跟 番剧名（第X季）： 的组合
-_DENSE_ENTRY_BREAK_RE = re.compile(
-    r'(?<=[。！？])'
-    r'(?='
-    r'[^\s。！？]{2,20}'
-    r'[（(][^）)]*季[）)]'
-    r'[：:]'
-    r')'
-)
+_DENSE_ENTRY_BREAK_RE = re.compile("(?<=[\u3002\uFF01\uFF1F])(?=[^\s\u3002\uFF01\uFF1F]{2,24}[\uFF08(][^\uFF09)]*\u5B63[\uFF09)][\uFF1A:])")
 
 
 def _split_dense_entries(text: str) -> str:
-    """检测密集的完结番剧类条目段落，在每个 。+番剧名 边界处插入换行。
-    仅当段落含 ≥3 个 （第X季） 模式条目时才触发，避免误拆正常叙事。"""
-    # 预检：是否含足够多的 "（第X季）" 模式
-    season_count = len(re.findall(r'[（(][^）)]*季[）)]', text))
+    season_count = len(re.findall("[\uFF08(][^\uFF09)]*\u5B63[\uFF09)]", text))
     if season_count < 3:
         return text
-    # 在每个 。后紧跟番剧名的位置插入 \\n，拆成每行一条
-    return _DENSE_ENTRY_BREAK_RE.sub(r'\n', text)
+    return _DENSE_ENTRY_BREAK_RE.sub("\n", text)
 
-
-# ============================================================
-#  分段/文风统一入口
-# ============================================================
 
 async def apply_segmentation_and_style(text: str, context, get_config) -> str:
-    """优先级：LLM 文风优化 > LLM 语义分段 > 规则分段"""
     if len(text) <= SEGMENT_THRESHOLD:
         return text
-
-    # 1) LLM 文风优化（含结构重组）
     result = await try_llm_style_optimize(text, context, get_config)
     if result:
-        logger.info("[分段/文风] 使用 LLM 文风优化")
         return _merge_orphan_colons(result)
-
-    # 2) LLM 语义分段
     result = await try_llm_segment(text, context, get_config)
     if result:
-        logger.info("[分段/文风] 使用 LLM 语义分段")
         return _merge_orphan_colons(result)
-
-    # 3) 规则分段
-    logger.info("[分段/文风] 使用规则分段")
     return _segment_text(text)
 
 
-# ============================================================
-#  多消息逐段发送
-# ============================================================
-
-async def send_followups(context, umo, paragraphs: list,
-                         delay_min: float, delay_max: float) -> None:
-    """逐段发送后续消息，段间随机延迟，模拟真人打字节奏"""
+async def send_followups(context, umo, paragraphs: list[str], delay_min: float, delay_max: float) -> None:
     from astrbot.api.all import MessageChain
 
+    delay_min = max(0.0, float(delay_min))
+    delay_max = max(0.0, float(delay_max))
+    if delay_min > delay_max:
+        delay_min, delay_max = delay_max, delay_min
     for i, para in enumerate(paragraphs):
         delay = random.uniform(delay_min, delay_max)
         await asyncio.sleep(delay)
         try:
             chain = MessageChain().message(para)
             await context.send_message(umo, chain)
-            logger.info(
-                "[多消息发送] 第 %d/%d 段已发送（延迟 %.1fs）",
-                i + 2, len(paragraphs) + 1, delay,
-            )
+            logger.info("[?????] ? %d/%d ????", i + 2, len(paragraphs) + 1)
         except Exception:
-            logger.warning("[多消息发送] 第 %d 段发送失败", i + 2, exc_info=True)
+            logger.warning("[?????] ? %d ?????", i + 2, exc_info=True)
 
 
-# ============================================================
-#  规则分段（fallback）
-# ============================================================
+def dedupe_similar_paragraphs(paragraphs: list[str]) -> list[str]:
+    """Collapse near-duplicate paragraphs before multi-message sending."""
+    unique: list[str] = []
+    for para in paragraphs:
+        if not para.strip():
+            continue
+        duplicate_idx = _find_similar_paragraph(unique, para)
+        if duplicate_idx is None:
+            unique.append(para)
+            continue
+        if _paragraph_score(para) >= _paragraph_score(unique[duplicate_idx]):
+            unique[duplicate_idx] = para
+    return unique
+
+
+def _find_similar_paragraph(paragraphs: list[str], candidate: str) -> int | None:
+    candidate_key = _dedupe_key(candidate)
+    if not candidate_key:
+        return None
+    for i, para in enumerate(paragraphs):
+        para_key = _dedupe_key(para)
+        if not para_key:
+            continue
+        if _is_near_duplicate(para, para_key, candidate, candidate_key):
+            return i
+    return None
+
+
+def _dedupe_key(text: str) -> str:
+    text = _MENTION_PREFIX_RE.sub("", text)
+    text = _DEDUP_NOISE_PHRASE_RE.sub("", text)
+    tokens = _DEDUP_TOKEN_RE.findall(text.lower())
+    return "".join(t for t in tokens if t not in _DEDUP_NOISE_TOKENS)
+
+
+def _is_near_duplicate(left: str, left_key: str, right: str, right_key: str) -> bool:
+    left_entities = set(_QUOTED_ENTITY_RE.findall(left))
+    right_entities = set(_QUOTED_ENTITY_RE.findall(right))
+    if left_entities & right_entities and _PROCESS_MARKER_RE.search(left) and _PROCESS_MARKER_RE.search(right):
+        return True
+    if left_key == right_key:
+        return True
+    shorter, longer = sorted((left_key, right_key), key=len)
+    if len(shorter) >= 12 and shorter in longer:
+        return True
+    similarity = SequenceMatcher(None, left_key, right_key).ratio()
+    if similarity >= 0.72:
+        return True
+    if similarity >= 0.58 and _PROCESS_MARKER_RE.search(left) and _PROCESS_MARKER_RE.search(right):
+        return True
+    return False
+
+
+def _paragraph_score(text: str) -> tuple[int, int]:
+    has_result = int(bool(re.search(
+        r"(?:\u6210\u529f|\u5b8c\u6210|\u5df2|\u53ef\u4ee5|\u7ed3\u679c|"
+        r"\u627e\u5230|\u6dfb\u52a0|\u8ba2\u9605\u6e90|\u7b2c\s*\d+\s*\u96c6)",
+        text,
+    )))
+    return has_result, len(_dedupe_key(text))
+
 
 def _is_list_block(text: str) -> bool:
-    """检测文本是否为列表结构（≥2 行带编号/符号前缀）"""
-    lines = text.split('\n')
-    list_count = sum(1 for ln in lines if _LIST_LINE_RE.match(ln))
-    return list_count >= 2
+    return sum(1 for line in text.split("\n") if _LIST_LINE_RE.match(line)) >= 2
 
 
-def _split_long_para(text: str) -> list:
-    """将单个长段落按句子均分成 ~200 字的子段落"""
+def _split_long_para(text: str) -> list[str]:
     sentences = [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
     if len(sentences) <= 2:
-        # 句子虽少但文本很长 → 按逗号/分号做子句切分再分组
         if len(text) > _CHARS_PER_PARA:
-            sub_clauses = re.split(r'(?<=[，,；;])\s*', text)
+            sub_clauses = re.split(r"(?<=[??])\s*", text)
             if len(sub_clauses) >= 4:
                 total = len(text)
-                n = max(2, min(_MAX_PARAS, total // _CHARS_PER_PARA))
-                size = max(1, len(sub_clauses) // n)
+                count = max(2, min(_MAX_PARAS, total // _CHARS_PER_PARA))
+                size = max(1, len(sub_clauses) // count)
                 paras = []
-                for i in range(n):
+                for i in range(count):
                     start = i * size
-                    end = len(sub_clauses) if i == n - 1 else start + size
-                    para = ''.join(sub_clauses[start:end])
+                    end = len(sub_clauses) if i == count - 1 else start + size
+                    para = "".join(sub_clauses[start:end])
                     if para:
                         paras.append(para)
                 if len(paras) >= 2:
                     return paras
         return [text]
-
     total = sum(len(s) for s in sentences)
-    n = max(2, min(_MAX_PARAS, total // _CHARS_PER_PARA))
-    size = max(1, len(sentences) // n)
-
+    count = max(2, min(_MAX_PARAS, total // _CHARS_PER_PARA))
+    size = max(1, len(sentences) // count)
     paras = []
-    for i in range(n):
+    for i in range(count):
         start = i * size
-        end = len(sentences) if i == n - 1 else start + size
-        para = ''.join(sentences[start:end])
+        end = len(sentences) if i == count - 1 else start + size
+        para = "".join(sentences[start:end])
         if para:
             paras.append(para)
     return paras
 
 
 def _segment_text(text: str) -> str:
-    """
-    改进的规则分段：
-    1. 短文本不处理
-    2. 密集文本（无换行）在小节标题前自动插入段落分隔
-    3. 按已有空行拆段，尊重 LLM/用户手动分段
-    4. 密集条目拆分（完结番剧列表等）
-    5. 对超长段落进一步细分（列表块除外）
-    6. 冒号标题向前合并（优先于长度合并）
-    7. 段数不足时拆分最长段；段数超限时合并最短段
-    8. 最终目标：3~5 段
-    """
-    if len(text) <= SEGMENT_THRESHOLD and text.count('\n\n') < 2:
+    if len(text) <= SEGMENT_THRESHOLD and text.count("\n\n") < 2:
         return text
-
-    # ---- 预处理：密集文本的段落拆分 ----
-    if text.count('\n') <= 2:
-        text = re.sub(
-            r'([。！？：])\s+(?=[^\s。！？：]{2,12}：)',
-            r'\1\n\n', text,
-        )
-
-    # ---- 预处理：单换行规范化 ----
-    text = re.sub(r'([。！？])\n(?!\n)', r'\1\n\n', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-
-    # 按已有空行拆段
-    raw = [p.strip() for p in text.split('\n\n') if p.strip()]
-
-    # 处理每段：密集条目拆分 + 超长细分（列表块除外）
-    result = []
+    if text.count("\n") <= 2:
+        text = re.sub("([\u3002\uFF01\uFF1F\uFF1A])\\s+(?=[^\s\u3002\uFF01\uFF1F\uFF1A]{2,12}[\uFF1A:])", r"\1\n\n", text)
+    text = re.sub("([\u3002\uFF01\uFF1F])\\n(?!\\n)", r"\1\n\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    raw = [p.strip() for p in text.split("\n\n") if p.strip()]
+    result: list[str] = []
     for para in raw:
-        # 密集完结条目 → 每行一条
         para = _split_dense_entries(para)
         if len(para) <= _CHARS_PER_PARA or _is_list_block(para):
             result.append(para)
         else:
             result.extend(_split_long_para(para))
-
-    # 段数太少（<3）→ 拆分最长段
-    if len(result) < 3 and len(result) > 0:
-        longest_idx = max(range(len(result)), key=lambda i: len(result[i]))
+    if 0 < len(result) < 3:
+        longest_idx = max(range(len(result)), key=lambda idx: len(result[idx]))
         longest = result.pop(longest_idx)
-        subs = _split_long_para(longest)
-        result[longest_idx:longest_idx] = subs
-
-    # ---- 冒号合并（在长度合并之前，确保冒号标题向前关联到正文） ----
-    text = _merge_orphan_colons('\n\n'.join(result))
-    result = [p.strip() for p in text.split('\n\n') if p.strip()]
-
-    # 段数超限（>_MAX_PARAS）→ 优先合并单行短段落，保护多行结构化条目
+        result[longest_idx:longest_idx] = _split_long_para(longest)
+    text = _merge_orphan_colons("\n\n".join(result))
+    result = [p.strip() for p in text.split("\n\n") if p.strip()]
     while len(result) > _MAX_PARAS:
-        # 优先选最短的单行段落（标题/过渡句），多行结构化条目合并代价更高
-        single_line_indices = [i for i, p in enumerate(result) if '\n' not in p]
+        single_line_indices = [i for i, p in enumerate(result) if "\n" not in p]
         if single_line_indices:
-            i = min(single_line_indices, key=lambda i: len(result[i]))
+            i = min(single_line_indices, key=lambda idx: len(result[idx]))
         else:
-            i = min(range(len(result)), key=lambda i: len(result[i]))
+            i = min(range(len(result)), key=lambda idx: len(result[idx]))
         if i == 0:
             j = 1
         elif i == len(result) - 1:
@@ -413,7 +297,6 @@ def _segment_text(text: str) -> str:
         else:
             j = i - 1 if len(result[i - 1]) <= len(result[i + 1]) else i + 1
         left, right = (i, j) if i < j else (j, i)
-        result[left] = result[left] + '\n' + result[right]
+        result[left] = result[left] + "\n" + result[right]
         result.pop(right)
-
-    return '\n\n'.join(result)
+    return "\n\n".join(result)

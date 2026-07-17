@@ -1,69 +1,69 @@
 {
   "llm_provider_id": {
-    "description": "分段/文风优化用 LLM 模型",
+    "description": "分段/文风优化使用的 LLM 模型",
     "type": "string",
-    "hint": "选择用于智能分段和文风优化的 LLM 模型（推荐轻量高性价比模型，如 qwen-2.5-7b / glm-4-flash 等）。留空则使用纯规则分段。",
+    "hint": "选择用于智能分段和文风优化的 LLM 模型。留空则只使用规则分段。",
     "default": "",
     "_special": "select_provider"
   },
   "enable_llm_style": {
     "description": "启用 LLM 文风优化",
     "type": "bool",
-    "hint": "开启后使用 LLM 对文本进行结构化重组和文风润色（保持人设不变）。含智能分段功能，无需同时开启 LLM 智能分段。",
+    "hint": "开启后使用 LLM 对文本进行自然化改写和分段。",
     "default": false
   },
   "enable_llm_segment": {
     "description": "启用 LLM 智能分段",
     "type": "bool",
-    "hint": "开启后使用 LLM 进行语义分段，关闭则使用纯规则分段",
+    "hint": "开启后使用 LLM 进行语义分段；关闭则使用规则分段。",
     "default": false
   },
   "enable_de_ai_flavor": {
-    "description": "启用正则去AI味",
+    "description": "启用正则去 AI 味",
     "type": "bool",
-    "hint": "开启后使用正则表达式清除高频AI公式化表达（如\"我来整理一下\"\"以下是...\"\"（括号备注）\"等）。建议保持开启。",
+    "hint": "清除常见公式化表达，例如“我来整理一下”“以下是”等。",
     "default": true
   },
   "enable_image_render": {
     "description": "启用图片渲染",
     "type": "bool",
-    "hint": "检测到结构化列表（如追番列表、食谱步骤等编号内容）时自动渲染为图片发送，避免 QQ 气泡排版错乱。需要 pip install Pillow。",
+    "hint": "检测到结构化列表时自动渲染为图片发送，需要 Pillow。",
     "default": false
   },
   "image_min_list_items": {
-    "description": "触发图片渲染的最小编号行数",
+    "description": "触发图片渲染的最少列表项数",
     "type": "int",
-    "hint": "文本包含 >= 此数量的编号列表行时触发图片渲染。建议 3~5。",
+    "hint": "文本包含不少于此数量的编号列表行时触发图片渲染。",
     "default": 3
   },
   "image_font_size": {
     "description": "图片字号（px）",
     "type": "int",
-    "hint": "渲染图片使用的字号。",
+    "hint": "渲染图片使用的字体大小。",
     "default": 22
   },
   "image_max_width": {
     "description": "图片最大宽度（px）",
     "type": "int",
-    "hint": "渲染图片的最大宽度，超出自动换行。",
+    "hint": "渲染图片的最大宽度，超出会自动换行。",
     "default": 600
   },
   "multi_message": {
     "description": "多消息逐段发送",
     "type": "bool",
-    "hint": "开启后将分段后的文本拆成多条消息，按段落依次发送（模拟真人逐段回复的节奏）。关闭则合并为一条消息发送。",
+    "hint": "开启后将分段后的文本拆成多条消息。",
     "default": true
   },
   "delay_min": {
     "description": "消息间隔下限（秒）",
     "type": "float",
-    "hint": "每条消息之间的最小间隔秒数。建议 2~5 秒。",
-    "default": 3.0
+    "hint": "每条后续消息之间的最小间隔。",
+    "default": 2.0
   },
   "delay_max": {
     "description": "消息间隔上限（秒）",
     "type": "float",
-    "hint": "每条消息之间的最大间隔秒数。建议 6~15 秒。",
-    "default": 10.0
+    "hint": "每条后续消息之间的最大间隔。若小于下限，插件会自动交换两个值。",
+    "default": 5.0
   }
 }

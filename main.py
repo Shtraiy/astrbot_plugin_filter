@@ -1,192 +1,211 @@
-"""
-语言逻辑优化大师 — 在消息发出前全面优化输出文本：
-1. 清洗 OneBot/MCP 泄漏的垃圾元数据符号
-2. "用户" → 群昵称替换
-3. 过滤系统路径 / 指令等敏感信息
-4. 删除工具调用过程叙述句
-5. 残存工具函数名 → 自然语言
-6. 正则去AI味（清除公式化表达）
-7. 长文本智能分段/文风优化
-8. 结构化列表自动渲染为图片（避免 QQ 气泡排版错乱）
-"""
+"""AstrBot plugin entry: optimize outgoing text before it is sent."""
+
+from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 
-from astrbot.api.star import Context, Star
-from astrbot.api.event import filter as _event_filter, AstrMessageEvent
 from astrbot.api import logger
-from astrbot.api.message_components import Plain
 from astrbot.api.all import MessageChain
+from astrbot.api.event import AstrMessageEvent, filter as _event_filter
+from astrbot.api.message_components import Plain
+from astrbot.api.star import Context, Star
 
+from .image_renderer import cleanup_temp_file, should_render_image, text_to_image
 from .pipelines import (
     clean_garbage,
-    replace_user,
+    de_ai_flavor,
+    deidentify_tool_names,
     filter_sensitive,
     remove_tool_narration,
-    deidentify_tool_names,
-    de_ai_flavor,
+    replace_user,
 )
-from .segmentation import (
-    apply_segmentation_and_style,
-    send_followups,
-)
-from .image_renderer import (
-    should_render_image,
-    text_to_image,
-    cleanup_temp_file,
-)
+from .segmentation import apply_segmentation_and_style, dedupe_similar_paragraphs, send_followups
 
 
 class LanguageLogicOptimizer(Star):
-    """
-    语言逻辑优化大师 — 在消息发出前全面优化输出文本：
-    ① 垃圾符号清洗 → ② 用户→昵称替换 → ③ 敏感信息过滤 →
-    ④ 删除叙述句 → ⑤ 工具名脱敏 → ⑥ 去AI味 →
-    ⑦ 智能分段/文风优化 → ⑧ 图片渲染
-    """
+    """Optimize outgoing text by cleaning metadata, tool traces, style, and layout."""
 
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config=None):
         super().__init__(context)
-        # 追踪后台发送任务，防止异常静默丢失
+        self.config = config
         self._pending_tasks: set[asyncio.Task] = set()
+        self._reply_locks: dict[str, asyncio.Lock] = {}
 
     @_event_filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
-        """消息发送前的最后一步：全面优化输出文本"""
         if not event:
             return
 
         try:
             result = event.get_result()
-            if not result:
+            if not result or not getattr(result, "chain", None):
                 return
 
-            chain = result.chain
-            if not chain:
-                return
+            # Keep replies from the same group/session contiguous. The lock is
+            # released only after all delayed follow-up messages are sent.
+            reply_key = event.unified_msg_origin
+            reply_lock = self._reply_locks.setdefault(reply_key, asyncio.Lock())
+            await reply_lock.acquire()
+            lock_owned = True
 
             modified = False
-            pipeline_stats: dict[str, int] = {}  # 记录每条管线的修改次数
+            pipeline_stats: dict[str, int] = {}
 
-            for comp in chain:
-                if isinstance(comp, Plain):
-                    original = comp.text
-                    text = original
+            for comp in result.chain:
+                if not isinstance(comp, Plain):
+                    continue
 
-                    # ============ 八道处理管线 ============
-                    text, changed = _apply_pipeline("①垃圾清洗", clean_garbage, text, pipeline_stats)
-                    text, changed = _apply_pipeline("②昵称替换", replace_user, text, pipeline_stats)
-                    text, changed = _apply_pipeline("③敏感过滤", filter_sensitive, text, pipeline_stats)
-                    text, changed = _apply_pipeline("④叙述删除", remove_tool_narration, text, pipeline_stats)
-                    text, changed = _apply_pipeline("⑤工具脱敏", deidentify_tool_names, text, pipeline_stats)
+                original = comp.text or ""
+                text = original
 
-                    # ⑥ 去AI味（正则清除公式化表达）
-                    if self._get_config("enable_de_ai_flavor", True):
-                        text, changed = _apply_pipeline("⑥去AI味", de_ai_flavor, text, pipeline_stats)
+                text, _ = _apply_pipeline("????", clean_garbage, text, pipeline_stats)
+                text, _ = _apply_pipeline("????", replace_user, text, pipeline_stats)
+                text, _ = _apply_pipeline("????", filter_sensitive, text, pipeline_stats)
+                text, _ = _apply_pipeline("????", remove_tool_narration, text, pipeline_stats)
+                text, _ = _apply_pipeline("????", deidentify_tool_names, text, pipeline_stats)
 
-                    # ⑦ 分段/文风优化（LLM 文风 > LLM 分段 > 规则）
-                    text, changed = await _apply_pipeline_async(
-                        "⑦分段优化", apply_segmentation_and_style,
-                        text, self.context, self._get_config,
-                        stats=pipeline_stats,
-                    )
-                    # =====================================
+                if self._get_config("enable_de_ai_flavor", True):
+                    text, _ = _apply_pipeline("? AI ?", de_ai_flavor, text, pipeline_stats)
 
-                    # ⑧ 图片渲染（检测到结构化列表时触发）
-                    if self._get_config("enable_image_render", False) and should_render_image(
-                        text, self._get_config
-                    ):
-                        image_path = await text_to_image(text, self._get_config)
-                        if image_path:
-                            umo = event.unified_msg_origin
-                            img_chain = MessageChain().file_image(image_path)
-                            await self.context.send_message(umo, img_chain)
-                            # 延迟清理临时图片文件（等待平台上传完成）
-                            cleanup_task = asyncio.create_task(
-                                cleanup_temp_file(image_path)
-                            )
-                            self._track_task(cleanup_task)
-                            comp.text = ""
-                            modified = True
-                            pipeline_stats["⑧图片渲染"] = pipeline_stats.get("⑧图片渲染", 0) + 1
-                            continue
+                text, _ = await _apply_pipeline_async(
+                    "????",
+                    apply_segmentation_and_style,
+                    text,
+                    self.context,
+                    self._get_config,
+                    stats=pipeline_stats,
+                )
 
-                    # ============ 多消息 & 最终写入 ============
-                    # 多消息模式优先——即使文本未被管线修改，也要按段落拆分
-                    if self._get_config("multi_message", True):
-                        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-                        if len(paragraphs) > 1:
-                            comp.text = paragraphs[0]
-                            modified = True
-                            delay_min = self._get_config("delay_min", 3.0)
-                            delay_max = self._get_config("delay_max", 10.0)
-                            umo = event.unified_msg_origin
-                            task = asyncio.create_task(
-                                send_followups(self.context, umo, paragraphs[1:],
-                                               delay_min, delay_max)
-                            )
-                            self._track_task(task)
-                            continue
-
-                    # 文本未被任何管线修改 → 无需替换原文
-                    if text == original:
+                if self._get_config("enable_image_render", False) and should_render_image(text, self._get_config):
+                    image_path = await text_to_image(text, self._get_config)
+                    if image_path:
+                        img_chain = MessageChain().file_image(image_path)
+                        await self.context.send_message(event.unified_msg_origin, img_chain)
+                        cleanup_task = asyncio.create_task(cleanup_temp_file(image_path))
+                        self._track_task(cleanup_task)
+                        comp.text = ""
+                        modified = True
+                        pipeline_stats["????"] = pipeline_stats.get("????", 0) + 1
                         continue
 
+                if self._get_config("multi_message", True):
+                    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+                    paragraphs = dedupe_similar_paragraphs(paragraphs)
+                    if len(paragraphs) > 1:
+                        comp.text = paragraphs[0]
+                        modified = True
+                        delay_min, delay_max = self._get_delay_range()
+                        task = asyncio.create_task(
+                            self._send_followups_and_release(
+                                reply_key,
+                                reply_lock,
+                                paragraphs[1:],
+                                delay_min,
+                                delay_max,
+                            )
+                        )
+                        self._track_task(task)
+                        lock_owned = False
+                        continue
+                    if len(paragraphs) == 1 and paragraphs[0] != original:
+                        comp.text = paragraphs[0]
+                        modified = True
+                        continue
+
+                if text != original:
                     comp.text = text
                     modified = True
 
             if modified:
-                # 汇总报告实际生效的管线
-                active = [k for k, v in pipeline_stats.items() if v > 0]
-                logger.info(
-                    "[语言逻辑优化大师] 已优化输出文本。生效管线: %s",
-                    ', '.join(active) if active else '无（文本无需修改）',
-                )
+                active = [name for name, count in pipeline_stats.items() if count > 0]
+                logger.info("[????????] ?????????????%s", ", ".join(active) if active else "?")
 
         except Exception:
-            logger.error("[语言逻辑优化大师] 运行时出错", exc_info=True)
+            logger.error("[????????] ?????", exc_info=True)
+        finally:
+            if "lock_owned" in locals() and lock_owned:
+                reply_lock.release()
+                if self._reply_locks.get(reply_key) is reply_lock:
+                    self._reply_locks.pop(reply_key, None)
 
-    # ============================================================
-    #  配置读取
-    # ============================================================
+    async def _send_followups_and_release(
+        self,
+        reply_key: str,
+        reply_lock: asyncio.Lock,
+        paragraphs: list[str],
+        delay_min: float,
+        delay_max: float,
+    ) -> None:
+        try:
+            await send_followups(self.context, reply_key, paragraphs, delay_min, delay_max)
+        finally:
+            if reply_lock.locked():
+                reply_lock.release()
+            if self._reply_locks.get(reply_key) is reply_lock:
+                self._reply_locks.pop(reply_key, None)
 
     def _get_config(self, key: str, default=None):
-        """读取插件配置（兼容多种 AstrBot 版本）"""
-        if hasattr(self, 'config') and isinstance(self.config, dict):
-            return self.config.get(key, default)
-        if hasattr(self.context, 'config') and isinstance(self.context.config, dict):
-            return self.context.config.get(key, default)
+        for source in (getattr(self, "config", None), getattr(self.context, "config", None)):
+            if source is None:
+                continue
+            value = _read_config_value(source, key, _MISSING)
+            if value is not _MISSING:
+                return value
         return default
 
-    # ============================================================
-    #  后台任务追踪
-    # ============================================================
+    def _get_float_config(self, key: str, default: float) -> float:
+        value = self._get_config(key, default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_delay_range(self) -> tuple[float, float]:
+        """Keep follow-up delays inside the requested 2-5 second window."""
+        delay_min = min(5.0, max(2.0, self._get_float_config("delay_min", 2.0)))
+        delay_max = min(5.0, max(2.0, self._get_float_config("delay_max", 5.0)))
+        return (delay_min, delay_max) if delay_min <= delay_max else (delay_max, delay_min)
 
     def _track_task(self, task: asyncio.Task) -> None:
-        """追踪后台任务，自动清理已完成的，防止异常静默丢失"""
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
         task.add_done_callback(_log_task_exception)
 
 
+_MISSING = object()
+
+
+def _read_config_value(source, key: str, default):
+    if isinstance(source, Mapping):
+        return source.get(key, default)
+    getter = getattr(source, "get", None)
+    if callable(getter):
+        try:
+            return getter(key, default)
+        except TypeError:
+            try:
+                value = getter(key)
+            except Exception:
+                return default
+            return default if value is None else value
+        except Exception:
+            return default
+    return getattr(source, key, default)
+
+
 def _log_task_exception(task: asyncio.Task) -> None:
-    """记录后台任务的未捕获异常"""
     try:
         exc = task.exception()
         if exc is not None:
-            logger.warning("[后台任务] 异常: %s", exc, exc_info=True)
+            logger.warning("[????] ???%s", exc, exc_info=True)
     except asyncio.CancelledError:
         pass
     except Exception:
         pass
 
 
-# ============================================================
-#  管线辅助函数
-# ============================================================
-
 def _apply_pipeline(name: str, func, text: str, stats: dict[str, int]) -> tuple[str, bool]:
-    """应用同步管线，记录修改"""
     result = func(text)
     if result != text:
         stats[name] = stats.get(name, 0) + 1
@@ -194,9 +213,7 @@ def _apply_pipeline(name: str, func, text: str, stats: dict[str, int]) -> tuple[
     return text, False
 
 
-async def _apply_pipeline_async(name: str, func, text: str, *args,
-                                stats: dict[str, int]) -> tuple[str, bool]:
-    """应用异步管线，记录修改"""
+async def _apply_pipeline_async(name: str, func, text: str, *args, stats: dict[str, int]) -> tuple[str, bool]:
     result = await func(text, *args)
     if result != text:
         stats[name] = stats.get(name, 0) + 1
