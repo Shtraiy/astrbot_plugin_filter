@@ -66,6 +66,7 @@ pip install -r requirements.txt
 | `multi_message` | bool | `true` | 是否将分段结果逐条发送 |
 | `delay_min` | float | `2.0` | 分段消息间隔下限，运行时限制在 2~5 秒 |
 | `delay_max` | float | `5.0` | 分段消息间隔上限，运行时限制在 2~5 秒 |
+| `cooldown_seconds` | float | `0.0` | 全局冷静期：规划回复、发送分段及冷静期内丢弃新唤醒；`0` 表示关闭 |
 
 当启用 LLM 功能时，需要先在 AstrBot 中配置可用的 LLM provider，并填写 `llm_provider_id`。LLM 不可用或输出不符合校验要求时，插件会自动使用规则处理。
 
@@ -116,7 +117,7 @@ astrbot_plugin_filter/
 
 ### 多消息发送顺序异常
 
-同一 `unified_msg_origin` 下的回复会串行处理。不同群聊或不同会话之间仍然可以同时发送。分段消息间隔固定限制在 2~5 秒范围内。
+同一 `unified_msg_origin` 下的回复会串行处理。启用 `cooldown_seconds` 后，机器人从开始规划回复起全局锁定，直到最后一条消息发送完成并经过冷静期；期间任何新的唤醒都会被直接丢弃。分段消息间隔固定限制在 2~5 秒范围内。
 
 ## 许可证
 

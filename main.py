@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Mapping
 
 from astrbot.api import logger
@@ -31,25 +32,43 @@ class LanguageLogicOptimizer(Star):
         self.config = config
         self._pending_tasks: set[asyncio.Task] = set()
         self._reply_locks: dict[str, asyncio.Lock] = {}
+        self._response_in_progress = False
+        self._gate_owner_event: AstrMessageEvent | None = None
+        self._cooldown_until = 0.0
+        self._pending_send: tuple[str, asyncio.Lock, AstrMessageEvent] | None = None
+
+    @_event_filter.on_waiting_llm_request()
+    async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
+        """Discard a wake-up before it waits for AstrBot's session lock."""
+        self._claim_or_stop_wake_up(event)
+
+    @_event_filter.on_llm_request()
+    async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
+        """Fallback gate check immediately before the LLM request."""
+        self._claim_or_stop_wake_up(event)
 
     @_event_filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
         if not event:
             return
 
+        reply_key = None
+        reply_lock = None
+        lock_owned = False
         try:
             result = event.get_result()
             if not result or not getattr(result, "chain", None):
+                self._release_gate(event)
                 return
 
-            # Keep replies from the same group/session contiguous. The lock is
-            # released only after all delayed follow-up messages are sent.
             reply_key = event.unified_msg_origin
             reply_lock = self._reply_locks.setdefault(reply_key, asyncio.Lock())
             await reply_lock.acquire()
             lock_owned = True
 
             modified = False
+            direct_send_completed = False
+            followups_scheduled = False
             pipeline_stats: dict[str, int] = {}
 
             for comp in result.chain:
@@ -85,6 +104,7 @@ class LanguageLogicOptimizer(Star):
                         cleanup_task = asyncio.create_task(cleanup_temp_file(image_path))
                         self._track_task(cleanup_task)
                         comp.text = ""
+                        direct_send_completed = True
                         modified = True
                         pipeline_stats["????"] = pipeline_stats.get("????", 0) + 1
                         continue
@@ -103,10 +123,12 @@ class LanguageLogicOptimizer(Star):
                                 paragraphs[1:],
                                 delay_min,
                                 delay_max,
+                                event,
                             )
                         )
                         self._track_task(task)
                         lock_owned = False
+                        followups_scheduled = True
                         continue
                     if len(paragraphs) == 1 and paragraphs[0] != original:
                         comp.text = paragraphs[0]
@@ -117,6 +139,18 @@ class LanguageLogicOptimizer(Star):
                     comp.text = text
                     modified = True
 
+            if followups_scheduled:
+                pass
+            elif direct_send_completed and not _has_pending_message(result.chain):
+                self._finish_reply(reply_key, reply_lock, event)
+                lock_owned = False
+            elif _has_pending_message(result.chain):
+                self._pending_send = (reply_key, reply_lock, event)
+                lock_owned = False
+            else:
+                self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
+                lock_owned = False
+
             if modified:
                 active = [name for name, count in pipeline_stats.items() if count > 0]
                 logger.info("[????????] ?????????????%s", ", ".join(active) if active else "?")
@@ -124,10 +158,16 @@ class LanguageLogicOptimizer(Star):
         except Exception:
             logger.error("[????????] ?????", exc_info=True)
         finally:
-            if "lock_owned" in locals() and lock_owned:
-                reply_lock.release()
-                if self._reply_locks.get(reply_key) is reply_lock:
-                    self._reply_locks.pop(reply_key, None)
+            if lock_owned and reply_key is not None and reply_lock is not None:
+                self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
+
+    @_event_filter.after_message_sent()
+    async def after_message_sent(self, event: AstrMessageEvent) -> None:
+        pending = self._pending_send
+        if pending is None or not self._is_pending_send_event(event, pending):
+            return
+        self._pending_send = None
+        self._finish_reply(pending[0], pending[1], pending[2])
 
     async def _send_followups_and_release(
         self,
@@ -136,14 +176,12 @@ class LanguageLogicOptimizer(Star):
         paragraphs: list[str],
         delay_min: float,
         delay_max: float,
+        owner_event: AstrMessageEvent | None = None,
     ) -> None:
         try:
             await send_followups(self.context, reply_key, paragraphs, delay_min, delay_max)
         finally:
-            if reply_lock.locked():
-                reply_lock.release()
-            if self._reply_locks.get(reply_key) is reply_lock:
-                self._reply_locks.pop(reply_key, None)
+            self._finish_reply(reply_key, reply_lock, owner_event)
 
     def _get_config(self, key: str, default=None):
         for source in (getattr(self, "config", None), getattr(self.context, "config", None)):
@@ -160,6 +198,68 @@ class LanguageLogicOptimizer(Star):
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    def _get_cooldown_seconds(self) -> float:
+        value = self._get_float_config("cooldown_seconds", 0.0)
+        return value if math.isfinite(value) and value > 0 else 0.0
+
+    def _event_is_wake_up(self, event: AstrMessageEvent) -> bool:
+        checker = getattr(event, "is_wake_up", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return True
+        return bool(checker) if checker is not None else True
+
+    def _claim_or_stop_wake_up(self, event: AstrMessageEvent) -> None:
+        if not event or not self._event_is_wake_up(event):
+            return
+        if self._gate_is_active() and self._gate_owner_event is not event:
+            event.stop_event()
+            return
+        if not self._response_in_progress:
+            self._response_in_progress = True
+            self._gate_owner_event = event
+
+    @staticmethod
+    def _is_pending_send_event(event: AstrMessageEvent, pending) -> bool:
+        if event is pending[2]:
+            return True
+        return getattr(event, "unified_msg_origin", None) == pending[0]
+
+    def _gate_is_active(self) -> bool:
+        if self._response_in_progress:
+            return True
+        if self._cooldown_until > asyncio.get_running_loop().time():
+            return True
+        self._cooldown_until = 0.0
+        return False
+
+    def _release_gate(self, owner_event: AstrMessageEvent, apply_cooldown: bool = False) -> None:
+        if self._gate_owner_event is not owner_event:
+            return
+        self._response_in_progress = False
+        self._gate_owner_event = None
+        self._cooldown_until = (
+            asyncio.get_running_loop().time() + self._get_cooldown_seconds()
+            if apply_cooldown
+            else 0.0
+        )
+
+    def _finish_reply(
+        self,
+        reply_key: str,
+        reply_lock: asyncio.Lock,
+        owner_event: AstrMessageEvent | None = None,
+        apply_cooldown: bool = True,
+    ) -> None:
+        if reply_lock.locked():
+            reply_lock.release()
+        if self._reply_locks.get(reply_key) is reply_lock:
+            self._reply_locks.pop(reply_key, None)
+        if owner_event is not None:
+            self._release_gate(owner_event, apply_cooldown=apply_cooldown)
 
     def _get_delay_range(self) -> tuple[float, float]:
         """Keep follow-up delays inside the requested 2-5 second window."""
@@ -203,6 +303,16 @@ def _log_task_exception(task: asyncio.Task) -> None:
         pass
     except Exception:
         pass
+
+
+def _has_pending_message(chain) -> bool:
+    for comp in chain:
+        if isinstance(comp, Plain):
+            if (comp.text or "").strip():
+                return True
+        else:
+            return True
+    return False
 
 
 def _apply_pipeline(name: str, func, text: str, stats: dict[str, int]) -> tuple[str, bool]:
