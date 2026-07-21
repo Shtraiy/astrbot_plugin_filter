@@ -10,7 +10,19 @@ from segmentation import (
     _split_dense_entries,
     _segment_text,
     _is_list_block,
+    _SEGMENT_PROMPT,
+    _STYLE_PROMPT,
 )
+
+
+def test_llm_prompts_are_readable_and_include_output_constraints():
+    for prompt in (_SEGMENT_PROMPT, _STYLE_PROMPT):
+        assert "????" not in prompt
+        assert "只输出" in prompt
+        assert "原文" in prompt
+
+    assert "空行" in _SEGMENT_PROMPT
+    assert "自然" in _STYLE_PROMPT
 
 
 # ============================================================

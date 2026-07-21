@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from astrbot.api import logger
 from astrbot.api.all import MessageChain
@@ -12,6 +13,13 @@ from astrbot.api.event import AstrMessageEvent, filter as _event_filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
+from .content_guard import (
+    SAFE_REPLY,
+    evaluate_input,
+    evaluate_output,
+    is_group_origin,
+    parse_terms,
+)
 from .image_renderer import cleanup_temp_file, should_render_image, text_to_image
 from .pipelines import (
     clean_garbage,
@@ -22,6 +30,12 @@ from .pipelines import (
     replace_user,
 )
 from .segmentation import apply_segmentation_and_style, dedupe_similar_paragraphs, send_followups
+
+
+@dataclass
+class _OnboardingState:
+    started_at: float
+    message_count: int = 0
 
 
 class LanguageLogicOptimizer(Star):
@@ -36,6 +50,7 @@ class LanguageLogicOptimizer(Star):
         self._gate_owner_event: AstrMessageEvent | None = None
         self._cooldown_until = 0.0
         self._pending_send: tuple[str, asyncio.Lock, AstrMessageEvent] | None = None
+        self._onboarding_states: dict[str, _OnboardingState] = {}
 
     @_event_filter.on_waiting_llm_request()
     async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
@@ -45,7 +60,23 @@ class LanguageLogicOptimizer(Star):
     @_event_filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
         """Fallback gate check immediately before the LLM request."""
-        self._claim_or_stop_wake_up(event)
+        if not self._claim_or_stop_wake_up(event):
+            return
+        if not self._get_config("enable_content_guard", True):
+            return
+
+        input_text = _extract_input_text(event, req)
+        if not input_text:
+            return
+
+        strict = self._touch_onboarding_state(event) or self._guard_mode() == "strict"
+        decision = evaluate_input(input_text, self._get_guard_terms(), strict=strict)
+        if not decision.blocked:
+            return
+
+        event.stop_event()
+        self._release_gate(event)
+        await self._send_guard_reply(event, decision.category)
 
     @_event_filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
@@ -69,8 +100,10 @@ class LanguageLogicOptimizer(Star):
             modified = False
             direct_send_completed = False
             followups_scheduled = False
+            guard_blocked = False
             pipeline_stats: dict[str, int] = {}
 
+            prepared_plain: list[tuple[Plain, str, str]] = []
             for comp in result.chain:
                 if not isinstance(comp, Plain):
                     continue
@@ -95,6 +128,27 @@ class LanguageLogicOptimizer(Star):
                     self._get_config,
                     stats=pipeline_stats,
                 )
+
+                if self._get_config("enable_content_guard", True):
+                    decision = evaluate_output(
+                        text,
+                        self._get_guard_terms(),
+                        strict=self._guard_mode() == "strict" or self._onboarding_active(event),
+                    )
+                    if decision.blocked:
+                        text = SAFE_REPLY
+                        guard_blocked = True
+                        pipeline_stats["content_guard"] = pipeline_stats.get("content_guard", 0) + 1
+
+                prepared_plain.append((comp, original, text))
+
+            fallback_written = False
+            for comp, original, text in prepared_plain:
+                if guard_blocked:
+                    comp.text = SAFE_REPLY if not fallback_written else ""
+                    fallback_written = True
+                    modified = True
+                    continue
 
                 if self._get_config("enable_image_render", False) and should_render_image(text, self._get_config):
                     image_path = await text_to_image(text, self._get_config)
@@ -212,15 +266,16 @@ class LanguageLogicOptimizer(Star):
                 return True
         return bool(checker) if checker is not None else True
 
-    def _claim_or_stop_wake_up(self, event: AstrMessageEvent) -> None:
+    def _claim_or_stop_wake_up(self, event: AstrMessageEvent) -> bool:
         if not event or not self._event_is_wake_up(event):
-            return
+            return True
         if self._gate_is_active() and self._gate_owner_event is not event:
             event.stop_event()
-            return
+            return False
         if not self._response_in_progress:
             self._response_in_progress = True
             self._gate_owner_event = event
+        return True
 
     @staticmethod
     def _is_pending_send_event(event: AstrMessageEvent, pending) -> bool:
@@ -261,6 +316,56 @@ class LanguageLogicOptimizer(Star):
         if owner_event is not None:
             self._release_gate(owner_event, apply_cooldown=apply_cooldown)
 
+    def _get_guard_terms(self) -> list[str]:
+        return parse_terms(self._get_config("content_guard_block_terms", ""))
+
+    def _guard_mode(self) -> str:
+        value = str(self._get_config("content_guard_mode", "balanced") or "balanced").lower()
+        return value if value in {"balanced", "strict"} else "balanced"
+
+    def _is_group_event(self, event: AstrMessageEvent) -> bool:
+        if is_group_origin(getattr(event, "unified_msg_origin", None)):
+            return True
+        return bool(getattr(event, "group_id", None))
+
+    def _touch_onboarding_state(self, event: AstrMessageEvent) -> bool:
+        if not self._is_group_event(event):
+            return False
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        if not origin:
+            return False
+        state = self._onboarding_states.get(origin)
+        now = asyncio.get_running_loop().time()
+        if state is None:
+            state = _OnboardingState(started_at=now)
+            self._onboarding_states[origin] = state
+        state.message_count += 1
+        return self._onboarding_active(event)
+
+    def _onboarding_active(self, event: AstrMessageEvent) -> bool:
+        if not self._is_group_event(event):
+            return False
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        state = self._onboarding_states.get(origin)
+        if state is None:
+            return False
+        duration = max(0.0, self._get_float_config("onboarding_guard_minutes", 30.0)) * 60
+        message_limit = max(0, int(self._get_float_config("onboarding_guard_messages", 20)))
+        elapsed_active = duration > 0 and asyncio.get_running_loop().time() - state.started_at < duration
+        count_active = message_limit > 0 and state.message_count <= message_limit
+        return elapsed_active or count_active
+
+    async def _send_guard_reply(self, event: AstrMessageEvent, category: str) -> None:
+        origin = getattr(event, "unified_msg_origin", None)
+        sender = getattr(self.context, "send_message", None)
+        if not origin or not callable(sender):
+            return
+        try:
+            await sender(origin, MessageChain().message(SAFE_REPLY))
+            logger.info("[content_guard] blocked category=%s", category)
+        except Exception:
+            logger.warning("[content_guard] failed to send safe reply", exc_info=True)
+
     def _get_delay_range(self) -> tuple[float, float]:
         """Keep follow-up delays inside the requested 2-5 second window."""
         delay_min = min(5.0, max(2.0, self._get_float_config("delay_min", 2.0)))
@@ -292,6 +397,37 @@ def _read_config_value(source, key: str, default):
         except Exception:
             return default
     return getattr(source, key, default)
+
+
+def _extract_input_text(event, req) -> str:
+    """Best-effort extraction of the user's raw message without reading system prompts."""
+    for source in (event, req):
+        if source is None:
+            continue
+        if isinstance(source, Mapping):
+            values = [source.get(name) for name in ("message_str", "user_message", "message", "raw_message")]
+        else:
+            values = []
+            for name in ("message_str", "user_message", "message", "raw_message"):
+                value = getattr(source, name, None)
+                if callable(value):
+                    try:
+                        value = value()
+                    except TypeError:
+                        value = None
+                    except Exception:
+                        value = None
+                values.append(value)
+            getter = getattr(source, "get_message_str", None)
+            if callable(getter):
+                try:
+                    values.insert(0, getter())
+                except Exception:
+                    pass
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value
+    return ""
 
 
 def _log_task_exception(task: asyncio.Task) -> None:

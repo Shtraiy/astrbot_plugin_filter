@@ -13,6 +13,8 @@
 - 多消息发送前合并高度相似的重复段落
 - 同一群聊内按顺序发送不同用户的完整回复，避免消息交错
 - 可选：将编号列表渲染为图片发送
+- 群聊输入和输出内容防护，拦截配置词库命中及常见诱导绕过请求
+- 新群聊在一段时间或一定消息数内自动启用更严格的防护
 
 ## 处理流程
 
@@ -67,6 +69,11 @@ pip install -r requirements.txt
 | `delay_min` | float | `2.0` | 分段消息间隔下限，运行时限制在 2~5 秒 |
 | `delay_max` | float | `5.0` | 分段消息间隔上限，运行时限制在 2~5 秒 |
 | `cooldown_seconds` | float | `0.0` | 全局冷静期：规划回复、发送分段及冷静期内丢弃新唤醒；`0` 表示关闭 |
+| `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
+| `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
+| `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
+| `onboarding_guard_minutes` | float | `30.0` | 新群聊严格防护的持续时间，单位为分钟 |
+| `onboarding_guard_messages` | int | `20` | 新群聊严格防护覆盖的 LLM 请求次数 |
 
 当启用 LLM 功能时，需要先在 AstrBot 中配置可用的 LLM provider，并填写 `llm_provider_id`。LLM 不可用或输出不符合校验要求时，插件会自动使用规则处理。
 
@@ -94,6 +101,7 @@ python -m pytest -q
 ```text
 astrbot_plugin_filter/
 ├── main.py              # 插件入口与输出流程编排
+├── content_guard.py     # 输入/输出内容防护与诱导检测
 ├── pipelines.py         # 文本清理、脱敏和去 AI 味
 ├── segmentation.py      # LLM/规则分段、重复检测和多消息发送
 ├── image_renderer.py    # 列表图片渲染
@@ -118,6 +126,10 @@ astrbot_plugin_filter/
 ### 多消息发送顺序异常
 
 同一 `unified_msg_origin` 下的回复会串行处理。启用 `cooldown_seconds` 后，机器人从开始规划回复起全局锁定，直到最后一条消息发送完成并经过冷静期；期间任何新的唤醒都会被直接丢弃。分段消息间隔固定限制在 2~5 秒范围内。
+
+### 群聊内容防护
+
+内容防护在用户请求进入 LLM 前和机器人最终发送前各检查一次。词库配置支持每行一个词或短语，也支持逗号分隔；检测会忽略常见空格、标点、零宽字符和 Unicode 变形。命中高风险内容时，机器人不会复述原文，而是发送中性提示。词库应根据实际群规和运营场景维护，插件不会内置会变化的具体词表。
 
 ## 许可证
 

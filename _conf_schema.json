@@ -71,5 +71,35 @@
     "type": "float",
     "hint": "机器人开始规划回复后锁住所有唤醒；最后一条回复发送完成后开始计时，冷静期内的新唤醒会直接丢弃。设置为 0 表示关闭。",
     "default": 0.0
+  },
+  "enable_content_guard": {
+    "description": "启用群聊内容防护",
+    "type": "bool",
+    "hint": "在 LLM 请求前和消息发送前拦截配置词库命中及常见诱导绕过请求。",
+    "default": true
+  },
+  "content_guard_mode": {
+    "description": "内容防护模式",
+    "type": "string",
+    "hint": "balanced 只拦截明确风险；strict 会在新群聊和可疑上下文中更积极地拦截。",
+    "default": "balanced"
+  },
+  "content_guard_block_terms": {
+    "description": "内容防护词库",
+    "type": "string",
+    "hint": "每行填写一个需要拦截的词或短语，也支持使用逗号分隔。源码不会内置会变化的具体词表。",
+    "default": ""
+  },
+  "onboarding_guard_minutes": {
+    "description": "新群聊严格防护时长（分钟）",
+    "type": "float",
+    "hint": "机器人首次处理该群消息后，在此时间内启用更严格的诱导检测；设置为 0 可关闭时间限制。",
+    "default": 30.0
+  },
+  "onboarding_guard_messages": {
+    "description": "新群聊严格防护消息数",
+    "type": "int",
+    "hint": "新群聊前多少次 LLM 请求启用严格防护；设置为 0 可关闭消息数限制。",
+    "default": 20
   }
 }
