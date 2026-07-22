@@ -1,5 +1,2 @@
-# Optional dependency for structured-list image rendering.
+aiohttp>=3.9.0
 Pillow>=10.0.0
-
-# Development dependency for local tests.
-# pytest>=8.0.0

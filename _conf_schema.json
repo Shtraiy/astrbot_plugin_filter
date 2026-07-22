@@ -1,105 +1,151 @@
 {
-  "llm_provider_id": {
-    "description": "分段/文风优化使用的 LLM 模型",
-    "type": "string",
-    "hint": "选择用于智能分段和文风优化的 LLM 模型。留空则只使用规则分段。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "enable_llm_style": {
-    "description": "启用 LLM 文风优化",
-    "type": "bool",
-    "hint": "开启后使用 LLM 对文本进行自然化改写和分段。",
-    "default": false
-  },
-  "enable_llm_segment": {
-    "description": "启用 LLM 智能分段",
-    "type": "bool",
-    "hint": "开启后使用 LLM 进行语义分段；关闭则使用规则分段。",
-    "default": false
-  },
-  "enable_de_ai_flavor": {
-    "description": "启用正则去 AI 味",
-    "type": "bool",
-    "hint": "清除常见公式化表达，例如“我来整理一下”“以下是”等。",
-    "default": true
-  },
-  "enable_image_render": {
-    "description": "启用图片渲染",
-    "type": "bool",
-    "hint": "检测到结构化列表时自动渲染为图片发送，需要 Pillow。",
-    "default": false
-  },
-  "image_min_list_items": {
-    "description": "触发图片渲染的最少列表项数",
-    "type": "int",
-    "hint": "文本包含不少于此数量的编号列表行时触发图片渲染。",
-    "default": 3
-  },
-  "image_font_size": {
-    "description": "图片字号（px）",
-    "type": "int",
-    "hint": "渲染图片使用的字体大小。",
-    "default": 22
-  },
-  "image_max_width": {
-    "description": "图片最大宽度（px）",
-    "type": "int",
-    "hint": "渲染图片的最大宽度，超出会自动换行。",
-    "default": 600
-  },
-  "multi_message": {
-    "description": "多消息逐段发送",
-    "type": "bool",
-    "hint": "开启后将分段后的文本拆成多条消息。",
-    "default": true
-  },
-  "delay_min": {
-    "description": "消息间隔下限（秒）",
-    "type": "float",
-    "hint": "每条后续消息之间的最小间隔。",
-    "default": 2.0
-  },
-  "delay_max": {
-    "description": "消息间隔上限（秒）",
-    "type": "float",
-    "hint": "每条后续消息之间的最大间隔。若小于下限，插件会自动交换两个值。",
-    "default": 5.0
-  },
-  "cooldown_seconds": {
-    "description": "冷静期（秒）",
-    "type": "float",
-    "hint": "机器人开始规划回复后锁住所有唤醒；最后一条回复发送完成后开始计时，冷静期内的新唤醒会直接丢弃。设置为 0 表示关闭。",
-    "default": 0.0
-  },
-  "enable_content_guard": {
-    "description": "启用群聊内容防护",
-    "type": "bool",
-    "hint": "在 LLM 请求前和消息发送前拦截配置词库命中及常见诱导绕过请求。",
-    "default": true
-  },
-  "content_guard_mode": {
-    "description": "内容防护模式",
-    "type": "string",
-    "hint": "balanced 只拦截明确风险；strict 会在新群聊和可疑上下文中更积极地拦截。",
-    "default": "balanced"
-  },
-  "content_guard_block_terms": {
-    "description": "内容防护词库",
-    "type": "string",
-    "hint": "每行填写一个需要拦截的词或短语，也支持使用逗号分隔。源码不会内置会变化的具体词表。",
-    "default": ""
-  },
-  "onboarding_guard_minutes": {
-    "description": "新群聊严格防护时长（分钟）",
-    "type": "float",
-    "hint": "机器人首次处理该群消息后，在此时间内启用更严格的诱导检测；设置为 0 可关闭时间限制。",
-    "default": 30.0
-  },
-  "onboarding_guard_messages": {
-    "description": "新群聊严格防护消息数",
-    "type": "int",
-    "hint": "新群聊前多少次 LLM 请求启用严格防护；设置为 0 可关闭消息数限制。",
-    "default": 20
-  }
+    "enabled": {
+      "type": "bool",
+      "description": "是否启用自动偷取",
+      "default": true
+    },
+    "group_whitelist": {
+      "type": "list",
+      "items": { "type": "string" },
+      "description": "群号或完整 UMO 白名单；为空时允许全部群",
+      "default": []
+    },
+    "vision_provider_id": {
+      "type": "string",
+      "description": "视觉识别模型服务提供商；留空时使用当前会话提供商",
+      "_special": "select_provider",
+      "default": ""
+    },
+    "scene_provider_id": {
+      "type": "string",
+      "description": "情景分类模型服务提供商；留空时使用当前会话提供商",
+      "_special": "select_provider",
+      "default": ""
+    },
+    "reply_scene_provider_id": {
+      "type": "string",
+      "description": "智能回复情景判定与候选图片匹配使用的多模态服务提供商；留空时复用情景分类提供商",
+      "_special": "select_provider",
+      "default": ""
+    },
+    "only_capture_memes": {
+      "type": "bool",
+      "description": "是否跳过视觉模型判定为普通照片的图片",
+      "default": true
+    },
+    "perceptual_dedupe_enabled": {
+      "type": "bool",
+      "description": "鍦ㄦā鍨嬭姹傚墠妫€鏌ョ浉浼煎浘鐗囬噸澶嶏紝Pillow 缂哄け鏃惰嚜鍔ㄥ洖閫€涓鸿璁惧幓閲嶏紒",
+      "default": true
+    },
+    "perceptual_duplicate_threshold": {
+      "type": "int",
+      "description": "鎰熺煡鍝堝笇鐨勬渶澶у搷搴旇窛绂伙紝鍊艰秺灏忚秺涓ユ牸",
+      "default": 6,
+      "minimum": 0,
+      "maximum": 16
+    },
+    "meme_rejection_confidence": {
+      "type": "float",
+      "description": "判定为普通照片并跳过保存的最低置信度",
+      "default": 0.7,
+      "minimum": 0,
+      "maximum": 1
+    },
+    "fallback_category": {
+      "type": "string",
+      "description": "模型失败或分类无效时使用的分类",
+      "default": "confused"
+    },
+    "max_images_per_message": {
+      "type": "int",
+      "description": "每条消息最多处理多少张图片",
+      "default": 2,
+      "minimum": 1,
+      "maximum": 6
+    },
+    "max_image_size_mb": {
+      "type": "int",
+      "description": "单张图片最大大小（MB）",
+      "default": 10,
+      "minimum": 1,
+      "maximum": 50
+    },
+    "download_timeout": {
+      "type": "int",
+      "description": "下载图片超时时间（秒）",
+      "default": 20,
+      "minimum": 5,
+      "maximum": 120
+    },
+    "max_concurrent": {
+      "type": "int",
+      "description": "同时进行识别的图片数量",
+      "default": 2,
+      "minimum": 1,
+      "maximum": 8
+    },
+    "health_check_interval": {
+      "type": "int",
+      "description": "检查 meme_manager 插件和数据目录的间隔（秒）",
+      "default": 60,
+      "minimum": 10,
+      "maximum": 600
+    },
+    "auto_send_enabled": {
+      "type": "bool",
+      "description": "是否由本插件统一接管机器人表情包发送",
+      "default": true
+    },
+    "auto_send_probability": {
+      "type": "float",
+      "description": "符合情景时发送表情包的概率（百分比）",
+      "default": 35,
+      "minimum": 0,
+      "maximum": 100
+    },
+    "auto_send_cooldown": {
+      "type": "float",
+      "description": "同一会话两次自动发送表情包的最短间隔（秒）",
+      "default": 30,
+      "minimum": 0,
+      "maximum": 3600
+    },
+    "auto_send_candidate_limit": {
+      "type": "int",
+      "description": "每次智能回复表情最多交给多模态模型比较的候选图片数",
+      "default": 8,
+      "minimum": 2,
+      "maximum": 16
+    },
+    "library_index_enabled": {
+      "type": "bool",
+      "description": "meme_manager 正常运行后是否自动补齐本地表情包索引",
+      "default": true
+    },
+    "library_index_provider_id": {
+      "type": "string",
+      "description": "后台自动整理已有表情包使用的多模态服务提供商；留空时复用视觉模型提供商",
+      "_special": "select_provider",
+      "default": ""
+    },
+    "library_index_progress_step": {
+      "type": "int",
+      "description": "后台索引每处理多少张图片写入一次进度日志",
+      "default": 5,
+      "minimum": 1,
+      "maximum": 50
+    },
+    "library_index_batch_size": {
+      "type": "int",
+      "description": "后台索引一次提交给多模态模型的图片数量",
+      "default": 6,
+      "minimum": 1,
+      "maximum": 12
+    },
+    "library_index_rename_files": {
+      "type": "bool",
+      "description": "后台索引时是否只在原分类目录内将图片重命名为 category_0001 格式",
+      "default": true
+    }
 }
