@@ -1,89 +1,141 @@
-# AstrBot 表情包偷取与识别
+# AstrBot 语言逻辑优化大师
 
-监听群聊中的图片消息，使用两个模型完成：
+一个用于 AstrBot 的输出后处理插件。在消息发送前清理模型输出中的内部痕迹，优化表达和排版，并支持智能分段、多消息发送与列表图片渲染。
 
-1. 视觉模型识别图片内容、情绪、图片文字，并判断是否像表情包。
-2. 情景模型结合图片描述、群聊文字和 meme_manager 现有分类选择目录。
+## 功能
 
-## 与 meme_manager 联动
+- 清理 OneBot、MCP 等结构化元数据泄漏
+- 过滤系统路径、Shell 命令、内网 IP、API Key 等敏感信息
+- 删除工具调用过程中的内部叙述
+- 将工具函数名转换为更自然的中文描述
+- 使用规则或 LLM 优化 AI 味表达
+- 支持 LLM 智能分段，失败时自动降级到规则分段
+- 多消息发送前合并高度相似的重复段落
+- 同一群聊内按顺序发送不同用户的完整回复，避免消息交错
+- 可选：将编号列表渲染为图片发送
+- 群聊输入和输出内容防护，拦截配置词库命中及常见诱导绕过请求
+- 新群聊在一段时间或一定消息数内自动启用更严格的防护
 
-插件通过 AstrBot 数据路径 API 定位：
+## 处理流程
 
 ```text
-/AstrBot/data/plugin_data/meme_manager/
-├── memes_data.json
-└── memes/
-    └── <category>/
-        └── stolen_<timestamp>_<sha256>.png
+AstrBot 生成回复
+        |
+        v
+垃圾符号清理 -> 用户称呼替换 -> 敏感信息过滤
+        |
+        v
+工具叙述清理 -> 工具名脱敏 -> AI 味优化
+        |
+        v
+LLM 分段/文风优化 -> 规则分段降级 -> 重复段落合并
+        |
+        v
+按会话串行发送
 ```
 
-图片会保存到 `memes/<category>/`，同一图片使用 SHA-256 去重；已有的 `memes_data.json` 分类描述不会被覆盖，新分类只会补充默认描述。安装并启用 `anka-afk/astrbot_plugin_meme_manager` 后，重载 meme_manager 使其刷新目录/提示词。
+## 安装
+
+### 通过 AstrBot 插件市场
+
+在 AstrBot 管理面板的插件市场中搜索“语言逻辑优化大师”，安装后重启 AstrBot。
+
+### 手动安装
+
+```bash
+cd AstrBot/data/plugins
+git clone https://github.com/Shtraiy/astrbot_plugin_filter.git
+cd astrbot_plugin_filter
+pip install -r requirements.txt
+```
+
+安装后重启 AstrBot，并在管理面板中打开插件配置。
 
 ## 配置
 
-- `group_whitelist`：群号或完整 UMO 白名单。留空表示全部群，建议生产环境填写需要收集的群。
-- `vision_provider_id`：在插件配置面板中选择视觉模型服务提供商，必须支持图片输入；留空时使用当前会话提供商。
-- `scene_provider_id`：在插件配置面板中选择“偷取后分类”的情景模型服务提供商；留空时使用当前会话提供商。
-- `reply_scene_provider_id`：在插件配置面板中选择判断机器人回复、选择分类并比较候选图片的多模态服务提供商；留空时复用 `scene_provider_id`。
-- `only_capture_memes`：开启后跳过视觉模型判定为普通照片的图片。
-- `fallback_category`：模型不可用或返回非法分类时的降级目录，默认 `confused`。
-- `max_images_per_message`、`max_image_size_mb`、`max_concurrent`：控制资源和模型调用成本。
-- `health_check_interval`：依赖插件健康检查间隔，默认 60 秒。
-- `auto_send_enabled`：启用后由本插件统一接管自动表情包发送，默认开启。
-- `auto_send_probability`：情景模型判定适合发送后，实际发送概率，默认 35%。
-- `auto_send_cooldown`：同一会话自动发送的最短间隔，默认 30 秒。
-- `auto_send_candidate_limit`：每次发送前交给多模态模型比较的候选图片数，默认 8。
-- `library_index_provider_id`：在插件配置面板中选择后台自动整理已有表情包库使用的多模态服务提供商；留空时复用 `vision_provider_id`。后台任务需要明确选择一个服务提供商。
-- `library_index_enabled`：meme_manager 正常运行后是否自动补齐本地表情包索引。
-- `library_index_progress_step`：后台索引每处理多少张图片写入一次进度日志。
-- `library_index_batch_size`：后台索引一次提交给多模态模型的图片数量，默认 6；Gemini 建议设置为 4～8。
-- `library_index_rename_files`：是否将图片重命名为 `happy_0001.png` 格式。
+配置入口：`AstrBot 管理面板 -> 插件 -> 语言逻辑优化大师 -> 配置`
 
-## meme_manager 依赖检查
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | ---: | --- |
+| `llm_provider_id` | provider | 空 | LLM 分段和文风优化使用的模型 |
+| `enable_llm_style` | bool | `false` | 启用 LLM 文风优化 |
+| `enable_llm_segment` | bool | `false` | 启用 LLM 语义分段 |
+| `enable_de_ai_flavor` | bool | `true` | 启用规则去 AI 味 |
+| `enable_image_render` | bool | `false` | 启用列表图片渲染 |
+| `image_min_list_items` | int | `3` | 触发图片渲染的最少列表项数 |
+| `image_font_size` | int | `22` | 图片字体大小 |
+| `image_max_width` | int | `600` | 图片最大宽度 |
+| `multi_message` | bool | `true` | 是否将分段结果逐条发送 |
+| `delay_min` | float | `2.0` | 分段消息间隔下限，运行时限制在 2~5 秒 |
+| `delay_max` | float | `5.0` | 分段消息间隔上限，运行时限制在 2~5 秒 |
+| `cooldown_seconds` | float | `0.0` | 全局冷静期：规划回复、发送分段及冷静期内丢弃新唤醒；`0` 表示关闭 |
+| `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
+| `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
+| `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
+| `onboarding_guard_minutes` | float | `30.0` | 新群聊严格防护的持续时间，单位为分钟 |
+| `onboarding_guard_messages` | int | `20` | 新群聊严格防护覆盖的 LLM 请求次数 |
 
-插件启动时、每次收到图片前以及定时任务中都会检查 `meme_manager`：
+当启用 LLM 功能时，需要先在 AstrBot 中配置可用的 LLM provider，并填写 `llm_provider_id`。LLM 不可用或输出不符合校验要求时，插件会自动使用规则处理。
 
-- 是否出现在 AstrBot 已加载插件注册表中；
-- `data/plugin_data/meme_manager/memes/` 是否存在且可读写；
-- `memes_data.json` 是否能正常解析。
+图片渲染需要 Pillow：
 
-检查失败时不会保存图片，避免产生 meme_manager 无法读取的“孤儿文件”。可发送 `/表情偷取状态` 查看当前状态。meme_manager 被安装、启用或重载后，插件会在下一次检查时自动恢复收集。
-
-## 统一发送逻辑
-
-插件在 AstrBot 的发送前钩子中以高优先级运行：先清理 meme_manager 的 `&&happy&&`、`&&shy&&` 等内联标记阻止其发送；随后由 `reply_scene_provider_id` 指定的情景模型判断 `should_send`。只有需要发送时，才根据模型返回的分类进入对应目录，再把该目录中的候选图片和图片索引交给多模态模型，选出最符合当前回复的一张并发送。
-
-模型入口不在本插件中填写 API Key、模型名称或 Provider ID。请先在 AstrBot 的服务提供商管理中配置模型，再在本插件配置面板中直接选择对应的服务提供商。`vision_provider_id`、`reply_scene_provider_id` 和 `library_index_provider_id` 都必须支持图片输入；`scene_provider_id` 在只用于偷取分类时可以是文本模型。
-
-因此 meme_manager 的自动发送设置不会再决定最终是否发图；它仍负责 WebUI、分类管理、云同步和文件维护。本插件只接管自动发送出口。发送模型不可用、没有合适分类或分类目录没有图片时，会保持不发送。
-
-## 手动偷取
-
-将图片和命令放在同一条消息中发送：
-
-```text
-/偷取 [图片]
+```bash
+pip install Pillow
 ```
 
-命令会立即执行视觉识别、重复检查、情景分类和保存；如果没有附带图片，会提示重新发送。手动命令仍遵守群聊和白名单限制。
+## 兼容性
 
-同一条消息包含多张新图片时，插件会先一次性调用视觉模型批量识别，再一次性调用情景模型批量分类，随后逐张保存结果。单张图片仍使用单图提示词；批量 Provider 不支持多图时会自动回退到逐张调用。
+- AstrBot：`>= 4.16, < 5`
+- Python：`>= 3.10`
+- 消息协议：OneBot v11 / v12
 
-## 自动整理已有表情包库
+## 开发与测试
 
-meme_manager 健康检查通过后，插件会按照现有 `memes/<category>/` 路径后台扫描图片。目录名是权威分类，模型只负责补充图片描述、情绪、文字和标签，不会把图片移动到其他分类目录。每个目录会生成：
-
-```text
-index.json   # 机器读取的图片索引
-README.md    # 人类可读的图片管理表
+```bash
+python -m py_compile main.py pipelines.py segmentation.py image_renderer.py
+python -m pytest -q
 ```
 
-图片默认会在原目录内重命名为 `shy_0001.png`、`happy_0002.jpg` 等稳定编号。后台会按 `library_index_batch_size` 批量调用多模态模型，并把进度写入 AstrBot 日志。整理失败的图片不会删除，只会在索引中标记为“待重新识别”；后续健康检查会再次尝试。
+## 项目结构
 
-自动回复表情现在将“是否发送、选择分类、候选图片匹配”合并为一次多模态模型调用；`auto_send_probability` 和 `auto_send_cooldown` 会在调用前生效，用于避免不必要的请求。
+```text
+astrbot_plugin_filter/
+├── main.py              # 插件入口与输出流程编排
+├── content_guard.py     # 输入/输出内容防护与诱导检测
+├── pipelines.py         # 文本清理、脱敏和去 AI 味
+├── segmentation.py      # LLM/规则分段、重复检测和多消息发送
+├── image_renderer.py    # 列表图片渲染
+├── _conf_schema.json     # AstrBot 配置项定义
+├── metadata.yaml         # 插件元数据
+├── requirements.txt      # Python 依赖
+├── tests/                # 测试代码
+├── LICENSE               # AGPL-3.0 许可证
+└── README.md
+```
 
-插件支持的默认分类包括 `angry`、`happy`、`sad`、`surprised`、`confused`、`color`、`cpu`、`fool`、`givemoney`、`like`、`see`、`shy`、`work`、`reply`、`meow`、`baka`、`morning`、`sleep`、`sigh`。如果 meme_manager 已有自定义分类，插件会优先读取本地目录和 `memes_data.json`。
+## 常见问题
 
-## 注意
+### 安装后没有生效
 
-图片会被上传给配置的视觉/情景模型，请确认群成员已知悉并遵守平台、隐私和内容管理要求。插件不会把图片复制进自身目录，卸载插件不会删除已收集的 meme_manager 数据。
+确认 AstrBot 版本满足要求，重启 AstrBot，并在日志中检查插件是否成功加载。
+
+### LLM 分段没有生效
+
+确认已配置 `llm_provider_id`，并打开 `enable_llm_segment` 或 `enable_llm_style`。插件会在 LLM 调用失败时自动降级，不影响普通规则分段。
+
+### 多消息发送顺序异常
+
+同一 `unified_msg_origin` 下的回复会串行处理。启用 `cooldown_seconds` 后，机器人从开始规划回复起全局锁定，直到最后一条消息发送完成并经过冷静期；期间任何新的唤醒都会被直接丢弃。分段消息间隔固定限制在 2~5 秒范围内。
+
+### 群聊内容防护
+
+内容防护在用户请求进入 LLM 前和机器人最终发送前各检查一次。词库配置支持每行一个词或短语，也支持逗号分隔；检测会忽略常见空格、标点、零宽字符和 Unicode 变形。命中高风险内容时，机器人不会复述原文，而是发送中性提示。词库应根据实际群规和运营场景维护，插件不会内置会变化的具体词表。
+
+## 许可证
+
+本项目采用 [GNU AGPL v3](./LICENSE) 许可证。
+
+## 作者
+
+- Shtraiy
+- 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)

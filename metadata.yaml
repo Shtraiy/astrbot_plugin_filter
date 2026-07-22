@@ -1,8 +1,7 @@
-name: astrbot_plugin_meme_stealer
-display_name: 表情包偷取与识别
-short_desc: 自动识别群聊表情包并分类保存到 meme_manager。
-desc: 使用视觉模型识别图片、情景模型结合群聊语境分类，并保存到 AstrBot meme_manager 的分类目录。
-version: v1.4.0
-author: YourName
-repo: https://github.com/your-name/astrbot_plugin_meme_stealer
-astrbot_version: ">=4.5.7,<5"
+name: astrbot_plugin_filter
+display_name: "\u8bed\u8a00\u903b\u8f91\u4f18\u5316\u5927\u5e08"
+desc: "\u7efc\u5408\u4f18\u5316 AstrBot \u8f93\u51fa\u6587\u672c\uff0c\u6e05\u7406\u5143\u6570\u636e\u3001\u5de5\u5177\u540d\u548c\u654f\u611f\u4fe1\u606f\uff0c\u5e76\u652f\u6301 LLM \u6587\u98ce\u4f18\u5316\u3001\u667a\u80fd\u5206\u6bb5\u548c\u5217\u8868\u56fe\u7247\u6e32\u67d3\u3002"
+version: 2.6.1
+author: Shtraiy
+repo: https://github.com/Shtraiy/astrbot_plugin_filter
+astrbot_version: ">=4.16,<5"
