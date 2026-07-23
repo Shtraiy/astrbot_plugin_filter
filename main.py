@@ -215,7 +215,9 @@ class LanguageLogicOptimizer(Star):
             if lock_owned and reply_key is not None and reply_lock is not None:
                 self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
 
-    @_event_filter.after_message_sent()
+    # Run before plugins such as meme_manager that may stop hook propagation.
+    # This callback owns the response gate cleanup, so it must not be skipped.
+    @_event_filter.after_message_sent(priority=1000)
     async def after_message_sent(self, event: AstrMessageEvent) -> None:
         pending = self._pending_send
         if pending is None or not self._is_pending_send_event(event, pending):
