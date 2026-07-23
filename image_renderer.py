@@ -81,7 +81,7 @@ async def text_to_image(text: str, get_config) -> str | None:
     try:
         from PIL import Image as PILImage, ImageDraw, ImageFont
     except ImportError:
-        logger.warning("[????] Pillow ????????")
+        logger.warning("[图片渲染] 未安装 Pillow，无法生成图片")
         return None
 
     font_path = find_cjk_font()
@@ -92,9 +92,9 @@ async def text_to_image(text: str, get_config) -> str | None:
         try:
             font = ImageFont.truetype(font_path, font_size)
         except Exception:
-            logger.warning("[????] ?????? %s", font_path, exc_info=True)
+            logger.warning("[图片渲染] 字体加载失败：%s", font_path, exc_info=True)
     if font is None:
-        logger.warning("[????] ??????????????")
+        logger.warning("[图片渲染] 未找到可用的中文字体")
         return None
 
     lines = _auto_number_lines(text.split("\n"))
@@ -126,7 +126,7 @@ async def text_to_image(text: str, get_config) -> str | None:
     try:
         img = await asyncio.to_thread(_render)
     except Exception:
-        logger.warning("[????] ????", exc_info=True)
+        logger.warning("[图片渲染] 图片绘制失败", exc_info=True)
         return None
 
     fd, temp_path = tempfile.mkstemp(suffix=".png", prefix="astrbot_filter_")
@@ -134,13 +134,13 @@ async def text_to_image(text: str, get_config) -> str | None:
     try:
         img.save(temp_path, "PNG")
     except Exception:
-        logger.warning("[????] ?? PNG ??", exc_info=True)
+        logger.warning("[图片渲染] 保存 PNG 文件失败", exc_info=True)
         try:
             os.unlink(temp_path)
         except OSError:
             pass
         return None
-    logger.info("[????] ????? %s (%dx%d)", temp_path, img.width, img.height)
+    logger.info("[图片渲染] 已生成图片：%s (%dx%d)", temp_path, img.width, img.height)
     return temp_path
 
 
@@ -168,6 +168,6 @@ async def cleanup_temp_file(path: str, delay: float = 120.0) -> None:
     await asyncio.sleep(delay)
     try:
         os.unlink(path)
-        logger.info("[????] ??????? %s", path)
+        logger.info("[图片渲染] 已清理临时文件：%s", path)
     except OSError:
         pass

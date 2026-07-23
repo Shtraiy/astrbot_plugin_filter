@@ -66,14 +66,14 @@ async def try_llm_segment(text: str, context, get_config) -> str | None:
     if not provider_id or len(text) <= SEGMENT_THRESHOLD:
         return None
     try:
-        logger.info("[LLM ??] ?? provider=%s", provider_id)
+        logger.info("[LLM 分段] 请求 provider=%s", provider_id)
         llm_resp = await context.llm_generate(chat_provider_id=provider_id, prompt=_SEGMENT_PROMPT.format(text=text))
         result = (getattr(llm_resp, "completion_text", "") or "").strip()
         if not _is_llm_result_usable(text, result, tolerance=0.05):
             return None
         return result.replace("\n---\n", "\n\n")
     except Exception:
-        logger.warning("[LLM ??] ????????????", exc_info=True)
+        logger.warning("[LLM 分段] 请求失败或结果不可用", exc_info=True)
         return None
 
 
@@ -84,14 +84,14 @@ async def try_llm_style_optimize(text: str, context, get_config) -> str | None:
     if not provider_id or len(text) <= SEGMENT_THRESHOLD:
         return None
     try:
-        logger.info("[LLM ??] ?? provider=%s", provider_id)
+        logger.info("[LLM 文风] 请求 provider=%s", provider_id)
         llm_resp = await context.llm_generate(chat_provider_id=provider_id, prompt=_STYLE_PROMPT.format(text=text))
         result = (getattr(llm_resp, "completion_text", "") or "").strip()
         if not _is_llm_result_usable(text, result, tolerance=0.10):
             return None
         return result
     except Exception:
-        logger.warning("[LLM ??] ????????????", exc_info=True)
+        logger.warning("[LLM 文风] 请求失败或结果不可用", exc_info=True)
         return None
 
 
@@ -101,7 +101,7 @@ def _is_llm_result_usable(original: str, result: str, tolerance: float) -> bool:
     orig_han = len(re.findall(r"[\u4e00-\u9fff]", original))
     result_han = len(re.findall(r"[\u4e00-\u9fff]", result))
     if orig_han > 0 and abs(orig_han - result_han) > orig_han * tolerance:
-        logger.warning("[LLM ??] ?????????%d -> %d", orig_han, result_han)
+        logger.warning("[LLM] 中文字数变化过大：%d -> %d", orig_han, result_han)
         return False
     return True
 
@@ -161,9 +161,9 @@ async def send_followups(context, umo, paragraphs: list[str], delay_min: float, 
         try:
             chain = MessageChain().message(para)
             await context.send_message(umo, chain)
-            logger.info("[?????] ? %d/%d ????", i + 2, len(paragraphs) + 1)
+            logger.info("[分段发送] 已发送第 %d/%d 条消息", i + 2, len(paragraphs) + 1)
         except Exception:
-            logger.warning("[?????] ? %d ?????", i + 2, exc_info=True)
+            logger.warning("[分段发送] 第 %d 条消息发送失败", i + 2, exc_info=True)
 
 
 def dedupe_similar_paragraphs(paragraphs: list[str]) -> list[str]:
@@ -236,7 +236,7 @@ def _split_long_para(text: str) -> list[str]:
     sentences = [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
     if len(sentences) <= 2:
         if len(text) > _CHARS_PER_PARA:
-            sub_clauses = re.split(r"(?<=[??])\s*", text)
+            sub_clauses = re.split(r"(?<=[，,；;])\s*", text)
             if len(sub_clauses) >= 4:
                 total = len(text)
                 count = max(2, min(_MAX_PARAS, total // _CHARS_PER_PARA))

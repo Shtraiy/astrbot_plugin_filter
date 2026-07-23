@@ -111,17 +111,17 @@ class LanguageLogicOptimizer(Star):
                 original = comp.text or ""
                 text = original
 
-                text, _ = _apply_pipeline("????", clean_garbage, text, pipeline_stats)
-                text, _ = _apply_pipeline("????", replace_user, text, pipeline_stats)
-                text, _ = _apply_pipeline("????", filter_sensitive, text, pipeline_stats)
-                text, _ = _apply_pipeline("????", remove_tool_narration, text, pipeline_stats)
-                text, _ = _apply_pipeline("????", deidentify_tool_names, text, pipeline_stats)
+                text, _ = _apply_pipeline("清理元数据", clean_garbage, text, pipeline_stats)
+                text, _ = _apply_pipeline("替换用户称呼", replace_user, text, pipeline_stats)
+                text, _ = _apply_pipeline("过滤敏感信息", filter_sensitive, text, pipeline_stats)
+                text, _ = _apply_pipeline("清理工具叙述", remove_tool_narration, text, pipeline_stats)
+                text, _ = _apply_pipeline("工具名称脱敏", deidentify_tool_names, text, pipeline_stats)
 
                 if self._get_config("enable_de_ai_flavor", True):
-                    text, _ = _apply_pipeline("? AI ?", de_ai_flavor, text, pipeline_stats)
+                    text, _ = _apply_pipeline("去除 AI 味", de_ai_flavor, text, pipeline_stats)
 
                 text, _ = await _apply_pipeline_async(
-                    "????",
+                    "分段与文风优化",
                     apply_segmentation_and_style,
                     text,
                     self.context,
@@ -160,7 +160,7 @@ class LanguageLogicOptimizer(Star):
                         comp.text = ""
                         direct_send_completed = True
                         modified = True
-                        pipeline_stats["????"] = pipeline_stats.get("????", 0) + 1
+                        pipeline_stats["列表图片渲染"] = pipeline_stats.get("列表图片渲染", 0) + 1
                         continue
 
                 if self._get_config("multi_message", True):
@@ -207,10 +207,10 @@ class LanguageLogicOptimizer(Star):
 
             if modified:
                 active = [name for name, count in pipeline_stats.items() if count > 0]
-                logger.info("[????????] ?????????????%s", ", ".join(active) if active else "?")
+                logger.info("[语言优化] 已应用处理流程：%s", ", ".join(active) if active else "无")
 
         except Exception:
-            logger.error("[????????] ?????", exc_info=True)
+            logger.error("[语言优化] 输出处理失败", exc_info=True)
         finally:
             if lock_owned and reply_key is not None and reply_lock is not None:
                 self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
@@ -436,7 +436,7 @@ def _log_task_exception(task: asyncio.Task) -> None:
     try:
         exc = task.exception()
         if exc is not None:
-            logger.warning("[????] ???%s", exc, exc_info=True)
+            logger.warning("[任务] 后台任务异常：%s", exc, exc_info=True)
     except asyncio.CancelledError:
         pass
     except Exception:

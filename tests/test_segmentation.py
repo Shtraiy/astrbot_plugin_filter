@@ -140,6 +140,16 @@ class TestSegmentText:
         short = "这是一条很短的文本。"
         assert _segment_text(short) == short
 
+    def test_long_text_with_clause_punctuation_is_split(self):
+        """长文本仅由逗号和分号连接时，也应按分句拆分"""
+        clauses = [f"这是第{i}个较长的说明内容" * 6 for i in range(1, 6)]
+        text = "，".join(clauses)
+
+        result = _split_long_para(text)
+
+        assert len(result) >= 2
+        assert "".join(result) == text
+
     def test_colon_header_attached_to_content(self):
         """冒号标题正确关联到正文"""
         text = "正在连载的番剧：\n\n番剧A详情\n\n番剧B详情"
