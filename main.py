@@ -29,7 +29,12 @@ from .pipelines import (
     remove_tool_narration,
     replace_user,
 )
-from .segmentation import apply_segmentation_and_style, dedupe_similar_paragraphs, send_followups
+from .segmentation import (
+    apply_segmentation_and_style,
+    combine_console_text,
+    dedupe_similar_paragraphs,
+    send_followups,
+)
 
 
 @dataclass
@@ -141,6 +146,24 @@ class LanguageLogicOptimizer(Star):
                         pipeline_stats["content_guard"] = pipeline_stats.get("content_guard", 0) + 1
 
                 prepared_plain.append((comp, original, text))
+
+            if guard_blocked:
+                console_text = SAFE_REPLY
+            else:
+                console_parts: list[str] = []
+                for _, _, text in prepared_plain:
+                    if self._get_config("multi_message", True):
+                        console_parts.extend(
+                            dedupe_similar_paragraphs(
+                                [p.strip() for p in text.split("\n\n") if p.strip()]
+                            )
+                        )
+                    else:
+                        console_parts.append(text)
+                console_text = combine_console_text(console_parts)
+
+            if console_text:
+                logger.info("[完整回复]\n%s", console_text)
 
             fallback_written = False
             for comp, original, text in prepared_plain:

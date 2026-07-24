@@ -6,9 +6,15 @@ import asyncio
 import logging
 import random
 import re
+from collections.abc import Iterable
 from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
+
+
+def combine_console_text(texts: Iterable[str]) -> str:
+    """Join processed reply parts for one complete console log entry."""
+    return "\n\n".join(text.strip() for text in texts if text and text.strip())
 
 _SENTENCE_SPLIT = re.compile("(?<=[\u3002\uFF01\uFF1F])\\s*")
 SEGMENT_THRESHOLD = 150
