@@ -44,6 +44,16 @@ class _OnboardingState:
     message_count: int = 0
 
 
+@dataclass
+class _GateState:
+    owner_event: AstrMessageEvent | None
+    cooldown_until: float = 0.0
+
+
+MAX_ONBOARDING_STATES = 4096
+MAX_GATE_STATES = 4096
+
+
 class LanguageLogicOptimizer(Star):
     """Optimize outgoing text by cleaning metadata, tool traces, style, and layout."""
 
@@ -52,10 +62,9 @@ class LanguageLogicOptimizer(Star):
         self.config = config
         self._pending_tasks: set[asyncio.Task] = set()
         self._reply_locks: dict[str, asyncio.Lock] = {}
-        self._response_in_progress = False
-        self._gate_owner_event: AstrMessageEvent | None = None
-        self._cooldown_until = 0.0
+        self._gates: dict[str, _GateState] = {}
         self._pending_send: tuple[str, asyncio.Lock, AstrMessageEvent] | None = None
+        self._pending_sends: dict[str, tuple[str, asyncio.Lock, AstrMessageEvent]] = {}
         self._onboarding_states: dict[str, _OnboardingState] = {}
 
     @_event_filter.on_waiting_llm_request()
@@ -135,6 +144,7 @@ class LanguageLogicOptimizer(Star):
                     self._get_config,
                     stats=pipeline_stats,
                 )
+                text, _ = _apply_pipeline("再次过滤敏感信息", filter_sensitive, text, pipeline_stats)
 
                 if self._get_config("enable_content_guard", True):
                     decision = evaluate_output(
@@ -165,7 +175,7 @@ class LanguageLogicOptimizer(Star):
                 console_text = combine_console_text(console_parts)
 
             if console_text:
-                logger.info("[完整回复]\n%s", console_text)
+                logger.info("[完整回复]\n%s", filter_sensitive(console_text))
 
             fallback_written = False
             for comp, original, text in prepared_plain:
@@ -224,7 +234,9 @@ class LanguageLogicOptimizer(Star):
                 self._finish_reply(reply_key, reply_lock, event)
                 lock_owned = False
             elif _has_pending_message(result.chain):
-                self._pending_send = (reply_key, reply_lock, event)
+                pending = (reply_key, reply_lock, event)
+                self._pending_sends[reply_key] = pending
+                self._pending_send = pending
                 lock_owned = False
             else:
                 self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
@@ -244,10 +256,16 @@ class LanguageLogicOptimizer(Star):
     # This callback owns the response gate cleanup, so it must not be skipped.
     @_event_filter.after_message_sent(priority=1000)
     async def after_message_sent(self, event: AstrMessageEvent) -> None:
-        pending = self._pending_send
+        origin = getattr(event, "unified_msg_origin", None)
+        pending_sends = getattr(self, "_pending_sends", {})
+        pending = pending_sends.get(origin)
+        if pending is None and isinstance(getattr(self, "_pending_send", None), tuple):
+            pending = self._pending_send
         if pending is None or not self._is_pending_send_event(event, pending):
             return
-        self._pending_send = None
+        pending_sends.pop(pending[0], None)
+        if self._pending_send is pending:
+            self._pending_send = None
         self._finish_reply(pending[0], pending[1], pending[2])
 
     async def _send_followups_and_release(
@@ -265,7 +283,8 @@ class LanguageLogicOptimizer(Star):
             self._finish_reply(reply_key, reply_lock, owner_event)
 
     def _get_config(self, key: str, default=None):
-        for source in (getattr(self, "config", None), getattr(self.context, "config", None)):
+        context = getattr(self, "context", None)
+        for source in (getattr(self, "config", None), getattr(context, "config", None)):
             if source is None:
                 continue
             value = _read_config_value(source, key, _MISSING)
@@ -280,9 +299,19 @@ class LanguageLogicOptimizer(Star):
         except (TypeError, ValueError):
             return default
 
-    def _get_cooldown_seconds(self) -> float:
-        value = self._get_float_config("cooldown_seconds", 0.0)
+    def _get_gate_seconds(self) -> float:
+        configured = self._get_config("gate_seconds", _MISSING)
+        if configured is _MISSING:
+            configured = self._get_config("cooldown_seconds", 0.0)
+        try:
+            value = float(configured)
+        except (TypeError, ValueError):
+            return 0.0
         return value if math.isfinite(value) and value > 0 else 0.0
+
+    def _get_cooldown_seconds(self) -> float:
+        """Backward-compatible alias for older configurations and callers."""
+        return self._get_gate_seconds()
 
     def _event_is_wake_up(self, event: AstrMessageEvent) -> bool:
         checker = getattr(event, "is_wake_up", None)
@@ -296,38 +325,61 @@ class LanguageLogicOptimizer(Star):
     def _claim_or_stop_wake_up(self, event: AstrMessageEvent) -> bool:
         if not event or not self._event_is_wake_up(event):
             return True
-        if self._gate_is_active() and self._gate_owner_event is not event:
-            event.stop_event()
-            return False
-        if not self._response_in_progress:
-            self._response_in_progress = True
-            self._gate_owner_event = event
+        if not hasattr(self, "_gates"):
+            self._gates = {}
+        key = self._gate_key(event)
+        if self._gate_is_active(event):
+            state = self._gates.get(key)
+            if state is None or state.owner_event is not event:
+                event.stop_event()
+                return False
+        if key not in self._gates:
+            if len(self._gates) >= MAX_GATE_STATES:
+                event.stop_event()
+                return False
+            self._gates[key] = _GateState(owner_event=event)
         return True
+
+    def _gate_key(self, event: AstrMessageEvent) -> str:
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        return origin or "__unified_default__"
+
+    def _gate_is_active(self, event: AstrMessageEvent | None = None) -> bool:
+        if not hasattr(self, "_gates"):
+            self._gates = {}
+        now = asyncio.get_running_loop().time()
+        expired = [
+            key
+            for key, state in self._gates.items()
+            if state.owner_event is None and state.cooldown_until <= now
+        ]
+        for key in expired:
+            self._gates.pop(key, None)
+        if event is None:
+            return bool(self._gates)
+        state = self._gates.get(self._gate_key(event))
+        return state is not None
+
+    def _release_gate(self, owner_event: AstrMessageEvent, apply_cooldown: bool = False) -> None:
+        if not hasattr(self, "_gates"):
+            self._gates = {}
+        key = self._gate_key(owner_event)
+        state = self._gates.get(key)
+        if state is None or state.owner_event is not owner_event:
+            return
+        if apply_cooldown:
+            cooldown = self._get_gate_seconds()
+            if cooldown > 0:
+                state.owner_event = None
+                state.cooldown_until = asyncio.get_running_loop().time() + cooldown
+                return
+        self._gates.pop(key, None)
 
     @staticmethod
     def _is_pending_send_event(event: AstrMessageEvent, pending) -> bool:
         if event is pending[2]:
             return True
         return getattr(event, "unified_msg_origin", None) == pending[0]
-
-    def _gate_is_active(self) -> bool:
-        if self._response_in_progress:
-            return True
-        if self._cooldown_until > asyncio.get_running_loop().time():
-            return True
-        self._cooldown_until = 0.0
-        return False
-
-    def _release_gate(self, owner_event: AstrMessageEvent, apply_cooldown: bool = False) -> None:
-        if self._gate_owner_event is not owner_event:
-            return
-        self._response_in_progress = False
-        self._gate_owner_event = None
-        self._cooldown_until = (
-            asyncio.get_running_loop().time() + self._get_cooldown_seconds()
-            if apply_cooldown
-            else 0.0
-        )
 
     def _finish_reply(
         self,
@@ -361,13 +413,37 @@ class LanguageLogicOptimizer(Star):
         origin = str(getattr(event, "unified_msg_origin", "") or "")
         if not origin:
             return False
-        state = self._onboarding_states.get(origin)
         now = asyncio.get_running_loop().time()
+        self._prune_onboarding_states(now)
+        state = self._onboarding_states.get(origin)
         if state is None:
+            if len(self._onboarding_states) >= MAX_ONBOARDING_STATES:
+                oldest = min(
+                    self._onboarding_states.items(),
+                    key=lambda item: item[1].started_at,
+                )[0]
+                self._onboarding_states.pop(oldest, None)
             state = _OnboardingState(started_at=now)
             self._onboarding_states[origin] = state
         state.message_count += 1
         return self._onboarding_active(event)
+
+    def _onboarding_duration_seconds(self) -> float:
+        value = self._get_float_config("onboarding_guard_minutes", 30.0)
+        return max(0.0, value * 60) if math.isfinite(value) else 0.0
+
+    def _onboarding_message_limit(self) -> int:
+        value = self._get_float_config("onboarding_guard_messages", 20)
+        return max(0, int(value)) if math.isfinite(value) else 0
+
+    def _prune_onboarding_states(self, now: float) -> None:
+        duration = self._onboarding_duration_seconds()
+        message_limit = self._onboarding_message_limit()
+        for origin, state in list(self._onboarding_states.items()):
+            elapsed_active = duration > 0 and now - state.started_at < duration
+            count_active = message_limit > 0 and state.message_count <= message_limit
+            if not (elapsed_active or count_active):
+                self._onboarding_states.pop(origin, None)
 
     def _onboarding_active(self, event: AstrMessageEvent) -> bool:
         if not self._is_group_event(event):
@@ -376,8 +452,8 @@ class LanguageLogicOptimizer(Star):
         state = self._onboarding_states.get(origin)
         if state is None:
             return False
-        duration = max(0.0, self._get_float_config("onboarding_guard_minutes", 30.0)) * 60
-        message_limit = max(0, int(self._get_float_config("onboarding_guard_messages", 20)))
+        duration = self._onboarding_duration_seconds()
+        message_limit = self._onboarding_message_limit()
         elapsed_active = duration > 0 and asyncio.get_running_loop().time() - state.started_at < duration
         count_active = message_limit > 0 and state.message_count <= message_limit
         return elapsed_active or count_active

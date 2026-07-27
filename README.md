@@ -69,7 +69,8 @@ pip install -r requirements.txt
 | `multi_message` | bool | `true` | 是否将分段结果逐条发送 |
 | `delay_min` | float | `2.0` | 分段消息间隔下限，运行时限制在 2~5 秒 |
 | `delay_max` | float | `5.0` | 分段消息间隔上限，运行时限制在 2~5 秒 |
-| `cooldown_seconds` | float | `0.0` | 全局冷静期：规划回复、发送分段及冷静期内丢弃新唤醒；`0` 表示关闭 |
+| `gate_seconds` | float | `0.0` | 闸门时间：最后一条分段消息发送完成后，等待此时间再接受同一来源的新唤醒；`0` 表示发送完成后立即接受 |
+| `cooldown_seconds` | float | `0.0` | 旧版冷静期配置，仅用于兼容；同时设置时优先使用 `gate_seconds` |
 | `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
 | `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
 | `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
@@ -126,7 +127,7 @@ astrbot_plugin_filter/
 
 ### 多消息发送顺序异常
 
-同一 `unified_msg_origin` 下的回复会串行处理。启用 `cooldown_seconds` 后，机器人从开始规划回复起全局锁定，直到最后一条消息发送完成并经过冷静期；期间任何新的唤醒都会被直接丢弃。分段消息间隔固定限制在 2~5 秒范围内。
+同一 `unified_msg_origin` 下的回复会串行处理。机器人从开始规划回复起锁定当前会话来源，直到最后一条消息发送完成并经过 `gate_seconds` 闸门时间；默认值为 `0`，即最后一条消息发送完成后立即接受新唤醒。其他会话来源不受影响。分段消息间隔固定限制在 2~5 秒范围内。
 
 ### 控制台只显示回复的一段
 

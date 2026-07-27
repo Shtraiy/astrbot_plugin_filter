@@ -18,6 +18,7 @@ def combine_console_text(texts: Iterable[str]) -> str:
 
 _SENTENCE_SPLIT = re.compile("(?<=[\u3002\uFF01\uFF1F])\\s*")
 SEGMENT_THRESHOLD = 150
+MAX_LAYOUT_CHARS = 100_000
 _CHARS_PER_PARA = 300
 _MAX_PARAS = 5
 _LIST_LINE_RE = re.compile(r"^\s*(?:\d+[\.\u3001\)\uFF09]|[\u2460-\u2469]|[-*])\s")
@@ -132,11 +133,14 @@ def _merge_orphan_colons(text: str) -> str:
     return "\n\n".join(merged)
 
 
-_DENSE_ENTRY_BREAK_RE = re.compile("(?<=[\u3002\uFF01\uFF1F])(?=[^\s\u3002\uFF01\uFF1F]{2,24}[\uFF08(][^\uFF09)]*\u5B63[\uFF09)][\uFF1A:])")
+_DENSE_ENTRY_BREAK_RE = re.compile(
+    r"(?<=[\u3002\uFF01\uFF1F])"
+    r"(?=[^\s\u3002\uFF01\uFF1F]{2,24}[\uFF08(][^\uFF09)]{0,80}\u5B63[\uFF09)]\uFF1A:])"
+)
 
 
 def _split_dense_entries(text: str) -> str:
-    season_count = len(re.findall("[\uFF08(][^\uFF09)]*\u5B63[\uFF09)]", text))
+    season_count = len(re.findall(r"[\uFF08(][^\uFF09)]{0,80}\u5B63[\uFF09)]", text))
     if season_count < 3:
         return text
     return _DENSE_ENTRY_BREAK_RE.sub("\n", text)
@@ -144,6 +148,9 @@ def _split_dense_entries(text: str) -> str:
 
 async def apply_segmentation_and_style(text: str, context, get_config) -> str:
     if len(text) <= SEGMENT_THRESHOLD:
+        return text
+    if len(text) > MAX_LAYOUT_CHARS:
+        logger.warning("[排版] 文本过长，跳过 LLM 和复杂排版：%d 字符", len(text))
         return text
     result = await try_llm_style_optimize(text, context, get_config)
     if result:

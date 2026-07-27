@@ -11,6 +11,12 @@ import tempfile
 logger = logging.getLogger(__name__)
 
 _LIST_DETECT_RE = re.compile(r"^\s*\d+[\.\)?)]\s+\S", re.MULTILINE)
+MAX_IMAGE_TEXT_CHARS = 50_000
+MAX_IMAGE_LINES = 500
+MAX_IMAGE_PIXELS = 12_000_000
+MIN_FONT_SIZE = 8
+MAX_FONT_SIZE = 72
+MAX_IMAGE_WIDTH = 1_600
 
 
 def find_cjk_font() -> str | None:
@@ -34,7 +40,13 @@ def find_cjk_font() -> str | None:
 
 
 def should_render_image(text: str, get_config) -> bool:
-    threshold = int(get_config("image_min_list_items", 3))
+    if len(text) > MAX_IMAGE_TEXT_CHARS:
+        return False
+    try:
+        threshold = int(get_config("image_min_list_items", 3))
+    except (TypeError, ValueError):
+        threshold = 3
+    threshold = min(MAX_IMAGE_LINES, max(1, threshold))
     if len(_LIST_DETECT_RE.findall(text)) >= threshold:
         return True
     lines = [line.strip() for line in text.split("\n") if line.strip()]
@@ -84,9 +96,21 @@ async def text_to_image(text: str, get_config) -> str | None:
         logger.warning("[图片渲染] 未安装 Pillow，无法生成图片")
         return None
 
+    if len(text) > MAX_IMAGE_TEXT_CHARS:
+        logger.warning("[图片渲染] 文本过长，跳过图片渲染：%d 字符", len(text))
+        return None
+
     font_path = find_cjk_font()
-    font_size = int(get_config("image_font_size", 22))
-    max_width = max(240, int(get_config("image_max_width", 600)))
+    try:
+        font_size = int(get_config("image_font_size", 22))
+    except (TypeError, ValueError):
+        font_size = 22
+    font_size = min(MAX_FONT_SIZE, max(MIN_FONT_SIZE, font_size))
+    try:
+        max_width = int(get_config("image_max_width", 600))
+    except (TypeError, ValueError):
+        max_width = 600
+    max_width = min(MAX_IMAGE_WIDTH, max(240, max_width))
     font = None
     if font_path:
         try:
@@ -98,6 +122,9 @@ async def text_to_image(text: str, get_config) -> str | None:
         return None
 
     lines = _auto_number_lines(text.split("\n"))
+    if len(lines) > MAX_IMAGE_LINES:
+        logger.warning("[图片渲染] 行数过多，跳过图片渲染：%d 行", len(lines))
+        return None
 
     def _render():
         temp_img = PILImage.new("RGB", (1, 1))
@@ -109,12 +136,16 @@ async def text_to_image(text: str, get_config) -> str | None:
         wrapped_lines: list[str] = []
         for line in lines:
             wrapped_lines.extend(_wrap_line(line, draw, font, content_width))
+        if len(wrapped_lines) > MAX_IMAGE_LINES:
+            raise ValueError("rendered image has too many lines")
         line_widths = []
         for line in wrapped_lines:
             bbox = draw.textbbox((0, 0), line, font=font)
             line_widths.append(bbox[2] - bbox[0])
         img_width = min(max(line_widths, default=1) + padding_x * 2, max_width)
         img_height = line_height * len(wrapped_lines) + padding_y * 2
+        if img_width * img_height > MAX_IMAGE_PIXELS:
+            raise ValueError("rendered image is too large")
         img = PILImage.new("RGB", (img_width, img_height), (0xF5, 0xF0, 0xE8))
         draw = ImageDraw.Draw(img)
         y = padding_y

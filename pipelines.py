@@ -59,9 +59,32 @@ _SHELL_CMD_RE = re.compile(r"(?:^|[\s\u3002\uff01\uff1f])(?:shell_exec|bash\s+-c
 _INTERNAL_IP_RE = re.compile(r"\b(?:127\.0\.0\.\d+|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|localhost|0\.0\.0\.0)\b(?::\d+)?", re.IGNORECASE)
 _URL_RE = re.compile(r"\b(?:https?://)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?::\d+)?(?:/[^\s\u3002\uff0c\uff01\uff1f\"'\uff09)]*)?", re.IGNORECASE)
 _SYSTEM_INFO_LINE_RE = re.compile(r"(?:\u8fdb\u7a0b\u5217\u8868|\u8fd0\u884c\u8fdb\u7a0b|\u540e\u53f0\u8fdb\u7a0b|\u6570\u636e\u5e93\u8fde\u63a5|\u914d\u7f6e\u6587\u4ef6|\u73af\u5883\u53d8\u91cf|API.?key|access.?token|\u5bc6\u7801|password|secret|\.env\b|\.config\b|\.conf\b|\.ini\b)\S*", re.IGNORECASE)
+_PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.IGNORECASE | re.DOTALL,
+)
+_BEARER_TOKEN_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}", re.IGNORECASE)
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
+_ASSIGNED_SECRET_RE = re.compile(
+    r"(?P<prefix>\b(?:api[_ -]?key|access[_ -]?token|authorization|bearer|password|secret|private[_ -]?key|token)\s*[:=]\s*)"
+    r"[\"']?[^\s,;\"']{8,}",
+    re.IGNORECASE,
+)
+_PREFIXED_SECRET_RE = re.compile(
+    r"\b(?:sk|pk|rk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b|\bAKIA[0-9A-Z]{16}\b",
+    re.IGNORECASE,
+)
 
 
 def filter_sensitive(text: str) -> str:
+    text = _PRIVATE_KEY_BLOCK_RE.sub("[REDACTED]", text)
+    text = _BEARER_TOKEN_RE.sub("Bearer [REDACTED]", text)
+    text = _JWT_RE.sub("[REDACTED]", text)
+    text = _ASSIGNED_SECRET_RE.sub(
+        lambda match: f"{match.group('prefix')}[REDACTED]",
+        text,
+    )
+    text = _PREFIXED_SECRET_RE.sub("[REDACTED]", text)
     text = _URL_RE.sub("[link]", text)
     text = _SYSTEM_PATH_RE.sub("", text)
     text = _SHELL_CMD_RE.sub("", text)

@@ -66,10 +66,16 @@
     "hint": "每条后续消息之间的最大间隔。若小于下限，插件会自动交换两个值。",
     "default": 5.0
   },
-  "cooldown_seconds": {
-    "description": "冷静期（秒）",
+  "gate_seconds": {
+    "description": "闸门时间（秒）",
     "type": "float",
-    "hint": "机器人开始规划回复后锁住所有唤醒；最后一条回复发送完成后开始计时，冷静期内的新唤醒会直接丢弃。设置为 0 表示关闭。",
+    "hint": "当前会话来源在最后一条分段消息真正发送完成前始终锁定；发送完成后等待此时间再接受新的唤醒。设置为 0 表示发送完成后立即接受。",
+    "default": 0.0
+  },
+  "cooldown_seconds": {
+    "description": "旧版冷静期（秒）",
+    "type": "float",
+    "hint": "兼容旧配置；如果同时设置了 gate_seconds，将优先使用 gate_seconds。",
     "default": 0.0
   },
   "enable_content_guard": {

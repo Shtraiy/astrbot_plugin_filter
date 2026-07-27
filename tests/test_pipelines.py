@@ -111,6 +111,17 @@ class TestFilterSensitive:
         result = filter_sensitive(text)
         assert 'API key' not in result
 
+    def test_redacts_common_secret_shapes(self):
+        text = (
+            'sk-proj-1234567890abcdef '
+            'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.secret.signature '
+            '-----BEGIN PRIVATE KEY----- ABC -----END PRIVATE KEY-----'
+        )
+        result = filter_sensitive(text)
+        assert 'sk-proj-' not in result
+        assert 'Bearer eyJ' not in result
+        assert 'BEGIN PRIVATE KEY' not in result
+
     def test_normal_text_unchanged(self):
         text = '你好，今天的天气真好。'
         result = filter_sensitive(text)
