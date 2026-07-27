@@ -72,6 +72,76 @@ def filter_sensitive(text: str) -> str:
 _NARRATION_MARKERS = re.compile("\u6211\u5148|\u8ba9\u6211|\u6211\u6765|\u6211\u9700\u8981|\u6211\u4eec\u9700\u8981|\u68c0\u67e5|\u786e\u8ba4|\u8c03\u7528|\u6267\u884c|\u8fd0\u884c|\u4f7f\u7528|\u901a\u8fc7|\u5de5\u5177|\u63a5\u53e3|\u547d\u4ee4|\u641c\u7d22|\u67e5\u8be2|\u68c0\u7d22|\u540e\u53f0|\u8fdb\u7a0b|\u914d\u7f6e|\u6570\u636e\u5e93")
 
 
+TOOL_LEAK_REPLACEMENT = "\u6211\u6b63\u5728\u5904\u7406\u8fd9\u4e2a\u8bf7\u6c42\uff0c\u8bf7\u7a0d\u7b49\u3002"
+
+# These patterns target leaked orchestration text rather than ordinary mentions
+# of tools in an answer. A hit requires at least two independent signals so a
+# legitimate explanation such as "web_search \u662f\u4e00\u4e2a\u641c\u7d22\u5de5\u5177" is preserved.
+_TOOL_PROTOCOL_RE = re.compile(
+    r"(?:calling\s+tool|call\s+the\s+tool|use\s+`?\w+|"
+    r"follow\s+the\s+tool\s+schema|after\s+execution|"
+    r"tool\s+(?:call|schema|execution)|\u8c03\u7528\u5de5\u5177|\u5de5\u5177\u8c03\u7528|\u5de5\u5177\u534f\u8bae)",
+    re.IGNORECASE,
+)
+_EXPLICIT_TOOL_PROTOCOL_RE = re.compile(
+    r"(?:calling\s+tool|call\s+the\s+tool|follow\s+the\s+tool\s+schema|"
+    r"after\s+execution|tool\s+schema\s+exactly|\u8c03\u7528\u5de5\u5177\u524d|\u5de5\u5177\u8c03\u7528\u540e)",
+    re.IGNORECASE,
+)
+_TOOL_NAME_RE = re.compile(
+    r"(?:astrbot_execute_shell|angel_recall|"
+    r"(?:es|rg|web|google|mikan|bangumi|anime)_search|"
+    r"(?:read|write)_file|(?:shell_exec|powershell|rag_search))",
+    re.IGNORECASE,
+)
+_COMMAND_FRAGMENT_RE = re.compile(
+    r"(?:`\s*(?:find|ls|rg|grep|dir|Get-ChildItem|python|powershell|bash|cmd)\b[^`]*`|"
+    r"\b(?:ls\s+-[alR]+|find\s+[^\n]{1,100}|rg\s+[^\n]{1,100})\b)",
+    re.IGNORECASE,
+)
+_PROCESS_NARRATION_RE = re.compile(
+    r"(?:\u6211(?:\u5148|\u6765|\u8fd9\u5c31|\u9700\u8981|\u4eec\u5148)|\u8ba9\u6211|\u7a0d\u7b49|\u7b49\u6211).{0,40}"
+    r"(?:\u540e\u53f0|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6587\u4ef6|\u7d22\u5f15|\u547d\u4ee4|\u5de5\u5177|\u641c\u7d22|\u67e5\u770b|\u68c0\u67e5|\u8bfb\u53d6|\u6267\u884c)",
+    re.IGNORECASE,
+)
+_INTERNAL_INSTRUCTION_RE = re.compile(
+    r"(?:the\s+instruction\s+says|tool\s+schema\s+exactly|"
+    r"final\s+(?:text\s+)?response|plain\s+text|markdown\s+syntax|"
+    r"\u8c03\u7528\u5de5\u5177\u524d|\u5de5\u5177\u8c03\u7528\u540e|\u4e0d\u8981\u8fd4\u56de\u7a7a\u56de\u590d)",
+    re.IGNORECASE,
+)
+
+
+def is_tool_call_leak(text: str) -> bool:
+    """Return whether text is an exposed tool orchestration draft."""
+    if not text or len(text.strip()) < 12:
+        return False
+
+    protocol = bool(_TOOL_PROTOCOL_RE.search(text))
+    tool_name = bool(_TOOL_NAME_RE.search(text))
+    command = bool(_COMMAND_FRAGMENT_RE.search(text))
+    narration = bool(_PROCESS_NARRATION_RE.search(text))
+    internal_instruction = bool(_INTERNAL_INSTRUCTION_RE.search(text))
+
+    # Protocol/meta text is strong evidence only when paired with a concrete
+    # tool or command. A Chinese process narration also needs a concrete
+    # execution signal; this avoids replacing normal status messages.
+    if _EXPLICIT_TOOL_PROTOCOL_RE.search(text):
+        return True
+    if protocol and (tool_name or command or internal_instruction):
+        return True
+    if tool_name and narration:
+        return True
+    if command and narration:
+        return True
+    return internal_instruction and tool_name
+
+
+def replace_tool_leakage(text: str) -> str:
+    """Replace a leaked tool workflow with a safe, user-facing status."""
+    return TOOL_LEAK_REPLACEMENT if is_tool_call_leak(text) else text
+
+
 def remove_tool_narration(text: str) -> str:
     out = []
     for para in text.split("\n\n"):

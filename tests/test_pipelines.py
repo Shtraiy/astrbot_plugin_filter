@@ -8,6 +8,7 @@ from pipelines import (
     clean_garbage,
     replace_user,
     filter_sensitive,
+    replace_tool_leakage,
     remove_tool_narration,
     deidentify_tool_names,
     de_ai_flavor,
@@ -144,7 +145,38 @@ class TestRemoveToolNarration:
 
 
 # ============================================================
-#  ⑤ deidentify_tool_names — 工具名脱敏
+#  ⑤ replace_tool_leakage — 拦截工具流程泄露
+# ============================================================
+
+class TestReplaceToolLeakage:
+    def test_replaces_tool_protocol_dump(self):
+        text = (
+            '我先到后台的文件夹里看一看有没有存放表情包相关的记录或者文件，稍微等我一下。'
+            ' Let\'s use `astrbot_execute_shell`. Calling tool... '
+            'follow the tool schema exactly and summarize the result after execution.'
+        )
+        result = replace_tool_leakage(text)
+        assert result == '我正在处理这个请求，请稍等。'
+
+    def test_replaces_tool_narration_with_command(self):
+        text = '我先调用 web_search 搜索一下相关内容。Let\'s call the tool with `ls -la`.'
+        result = replace_tool_leakage(text)
+        assert result == '我正在处理这个请求，请稍等。'
+
+    def test_replaces_explicit_tool_protocol(self):
+        assert replace_tool_leakage('Calling tool...') == '我正在处理这个请求，请稍等。'
+
+    def test_keeps_normal_tool_explanation(self):
+        text = 'web_search 是用于搜索网页内容的工具，适合查找实时信息。'
+        assert replace_tool_leakage(text) == text
+
+    def test_keeps_normal_backend_status(self):
+        text = '后台索引已经完成，共找到 12 个表情包。'
+        assert replace_tool_leakage(text) == text
+
+
+# ============================================================
+#  ⑥ deidentify_tool_names — 工具名脱敏
 # ============================================================
 
 class TestDeidentifyToolNames:
@@ -182,7 +214,7 @@ class TestDeidentifyToolNames:
 
 
 # ============================================================
-#  ⑥ de_ai_flavor — 去AI味
+#  ⑦ de_ai_flavor — 去AI味
 # ============================================================
 
 class TestDeAiFlavor:

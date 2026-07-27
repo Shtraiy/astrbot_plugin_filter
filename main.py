@@ -26,6 +26,7 @@ from .pipelines import (
     de_ai_flavor,
     deidentify_tool_names,
     filter_sensitive,
+    replace_tool_leakage,
     remove_tool_narration,
     replace_user,
 )
@@ -119,6 +120,7 @@ class LanguageLogicOptimizer(Star):
                 text, _ = _apply_pipeline("清理元数据", clean_garbage, text, pipeline_stats)
                 text, _ = _apply_pipeline("替换用户称呼", replace_user, text, pipeline_stats)
                 text, _ = _apply_pipeline("过滤敏感信息", filter_sensitive, text, pipeline_stats)
+                text, _ = _apply_pipeline("拦截工具流程泄露", replace_tool_leakage, text, pipeline_stats)
                 text, _ = _apply_pipeline("清理工具叙述", remove_tool_narration, text, pipeline_stats)
                 text, _ = _apply_pipeline("工具名称脱敏", deidentify_tool_names, text, pipeline_stats)
 
