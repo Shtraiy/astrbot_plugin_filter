@@ -9,8 +9,8 @@
   "enable_llm_style": {
     "description": "启用 LLM 文风优化",
     "type": "bool",
-    "hint": "开启后使用 LLM 对文本进行自然化改写和分段。",
-    "default": false
+    "hint": "开启后每条正常的非空回复都会调用 LLM，保留原意并删除适量八股文；需要配置 llm_provider_id。",
+    "default": true
   },
   "enable_llm_segment": {
     "description": "启用 LLM 智能分段",

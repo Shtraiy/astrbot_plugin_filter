@@ -59,7 +59,7 @@ pip install -r requirements.txt
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | ---: | --- |
 | `llm_provider_id` | provider | 空 | LLM 分段和文风优化使用的模型 |
-| `enable_llm_style` | bool | `false` | 启用 LLM 文风优化 |
+| `enable_llm_style` | bool | `true` | 每条正常非空回复调用 LLM 润色，保留原意并适量删除八股文；需要配置 `llm_provider_id` |
 | `enable_llm_segment` | bool | `false` | 启用 LLM 语义分段 |
 | `enable_de_ai_flavor` | bool | `true` | 启用规则去 AI 味 |
 | `enable_image_render` | bool | `false` | 启用列表图片渲染 |
@@ -123,7 +123,7 @@ astrbot_plugin_filter/
 
 ### LLM 分段没有生效
 
-确认已配置 `llm_provider_id`，并打开 `enable_llm_segment` 或 `enable_llm_style`。插件会在 LLM 调用失败时自动降级，不影响普通规则分段。
+确认已配置 `llm_provider_id`，并打开 `enable_llm_style`（默认开启）。插件会对每条正常非空回复尝试调用 LLM；调用失败、结果不合格或文本超出安全上限时自动降级，不影响普通规则处理。该功能会增加延迟和模型调用消耗。
 
 ### 多消息发送顺序异常
 

@@ -3,6 +3,9 @@
 _segment_text 规则分段。
 """
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 
 from segmentation import (
@@ -12,6 +15,7 @@ from segmentation import (
     _is_list_block,
     _SEGMENT_PROMPT,
     _STYLE_PROMPT,
+    apply_segmentation_and_style,
 )
 
 
@@ -23,6 +27,34 @@ def test_llm_prompts_are_readable_and_include_output_constraints():
 
     assert "空行" in _SEGMENT_PROMPT
     assert "自然" in _STYLE_PROMPT
+
+
+def test_short_reply_is_sent_to_llm_style_optimizer():
+    calls = []
+
+    class FakeContext:
+        async def llm_generate(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(completion_text="这是需要保留原意的短消息。")
+
+    text = "这是一个需要保留原意的短消息。"
+    config = {
+        "enable_llm_style": True,
+        "enable_llm_segment": False,
+        "llm_provider_id": "siliconflow-test",
+    }
+
+    result = asyncio.run(
+        apply_segmentation_and_style(
+            text,
+            FakeContext(),
+            lambda key, default: config.get(key, default),
+        )
+    )
+
+    assert calls
+    assert calls[0]["chat_provider_id"] == "siliconflow-test"
+    assert result == "这是需要保留原意的短消息。"
 
 
 # ============================================================
