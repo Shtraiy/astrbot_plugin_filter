@@ -12,6 +12,12 @@
     "hint": "开启后每条正常的非空回复都会调用 LLM，保留原意并删除适量八股文；需要配置 llm_provider_id。",
     "default": true
   },
+  "llm_timeout_seconds": {
+    "description": "LLM 单次请求超时时间（秒）",
+    "type": "float",
+    "hint": "文风润色或智能分段单次最多等待的时间；超时会自动回退到原文或规则处理，默认 15 秒，最大 60 秒。",
+    "default": 15.0
+  },
   "enable_llm_segment": {
     "description": "启用 LLM 智能分段",
     "type": "bool",

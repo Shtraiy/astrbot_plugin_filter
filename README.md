@@ -60,6 +60,7 @@ pip install -r requirements.txt
 | --- | --- | ---: | --- |
 | `llm_provider_id` | provider | 空 | LLM 分段和文风优化使用的模型 |
 | `enable_llm_style` | bool | `true` | 每条正常非空回复调用 LLM 润色，保留原意并适量删除八股文；需要配置 `llm_provider_id` |
+| `llm_timeout_seconds` | float | `15.0` | 单次 LLM 润色/分段最多等待时间；超时自动回退，最大 60 秒 |
 | `enable_llm_segment` | bool | `false` | 启用 LLM 语义分段 |
 | `enable_de_ai_flavor` | bool | `true` | 启用规则去 AI 味 |
 | `enable_image_render` | bool | `false` | 启用列表图片渲染 |

@@ -67,6 +67,17 @@ _STYLE_PROMPT = (
 )
 
 
+def _get_llm_timeout_seconds(get_config) -> float:
+    """Return a bounded timeout so a stalled provider cannot block replies."""
+    try:
+        timeout = float(get_config("llm_timeout_seconds", 15.0))
+    except (TypeError, ValueError):
+        return 15.0
+    if timeout <= 0:
+        return 15.0
+    return min(timeout, 60.0)
+
+
 async def try_llm_segment(text: str, context, get_config) -> str | None:
     if not get_config("enable_llm_segment", False):
         return None
@@ -75,11 +86,17 @@ async def try_llm_segment(text: str, context, get_config) -> str | None:
         return None
     try:
         logger.info("[LLM 分段] 请求 provider=%s", provider_id)
-        llm_resp = await context.llm_generate(chat_provider_id=provider_id, prompt=_SEGMENT_PROMPT.format(text=text))
+        llm_resp = await asyncio.wait_for(
+            context.llm_generate(chat_provider_id=provider_id, prompt=_SEGMENT_PROMPT.format(text=text)),
+            timeout=_get_llm_timeout_seconds(get_config),
+        )
         result = (getattr(llm_resp, "completion_text", "") or "").strip()
         if not _is_llm_result_usable(text, result, tolerance=0.05):
             return None
         return result.replace("\n---\n", "\n\n")
+    except asyncio.TimeoutError:
+        logger.warning("[LLM 分段] 请求超时，回退规则分段")
+        return None
     except Exception:
         logger.warning("[LLM 分段] 请求失败或结果不可用", exc_info=True)
         return None
@@ -93,11 +110,17 @@ async def try_llm_style_optimize(text: str, context, get_config) -> str | None:
         return None
     try:
         logger.info("[LLM 文风] 请求 provider=%s", provider_id)
-        llm_resp = await context.llm_generate(chat_provider_id=provider_id, prompt=_STYLE_PROMPT.format(text=text))
+        llm_resp = await asyncio.wait_for(
+            context.llm_generate(chat_provider_id=provider_id, prompt=_STYLE_PROMPT.format(text=text)),
+            timeout=_get_llm_timeout_seconds(get_config),
+        )
         result = (getattr(llm_resp, "completion_text", "") or "").strip()
         if not _is_llm_result_usable(text, result, tolerance=0.10):
             return None
         return result
+    except asyncio.TimeoutError:
+        logger.warning("[LLM 文风] 请求超时，回退原文/规则处理")
+        return None
     except Exception:
         logger.warning("[LLM 文风] 请求失败或结果不可用", exc_info=True)
         return None
