@@ -78,12 +78,6 @@
     "hint": "当前会话来源在最后一条分段消息真正发送完成前始终锁定；发送完成后等待此时间再接受新的唤醒。设置为 0 表示发送完成后立即接受。",
     "default": 0.0
   },
-  "cooldown_seconds": {
-    "description": "旧版冷静期（秒）",
-    "type": "float",
-    "hint": "兼容旧配置；如果同时设置了 gate_seconds，将优先使用 gate_seconds。",
-    "default": 0.0
-  },
   "enable_content_guard": {
     "description": "启用群聊内容防护",
     "type": "bool",
