@@ -199,6 +199,12 @@ async def send_followups(context, umo, paragraphs: list[str], delay_min: float, 
         delay = random.uniform(delay_min, delay_max)
         await asyncio.sleep(delay)
         try:
+            logger.info(
+                "[分段发送] 准备发送第 %d/%d 条消息：\n%s",
+                i + 2,
+                len(paragraphs) + 1,
+                para,
+            )
             chain = MessageChain().message(para)
             await context.send_message(umo, chain)
             logger.info("[分段发送] 已发送第 %d/%d 条消息", i + 2, len(paragraphs) + 1)
