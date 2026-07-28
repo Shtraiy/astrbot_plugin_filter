@@ -32,7 +32,6 @@ from .pipelines import (
 )
 from .segmentation import (
     apply_segmentation_and_style,
-    combine_console_text,
     dedupe_similar_paragraphs,
     send_followups,
 )
@@ -159,24 +158,6 @@ class LanguageLogicOptimizer(Star):
 
                 prepared_plain.append((comp, original, text))
 
-            if guard_blocked:
-                console_text = SAFE_REPLY
-            else:
-                console_parts: list[str] = []
-                for _, _, text in prepared_plain:
-                    if self._get_config("multi_message", True):
-                        console_parts.extend(
-                            dedupe_similar_paragraphs(
-                                [p.strip() for p in text.split("\n\n") if p.strip()]
-                            )
-                        )
-                    else:
-                        console_parts.append(text)
-                console_text = combine_console_text(console_parts)
-
-            if console_text:
-                logger.info("[完整回复]\n%s", filter_sensitive(console_text))
-
             fallback_written = False
             for comp, original, text in prepared_plain:
                 if guard_blocked:
@@ -202,11 +183,6 @@ class LanguageLogicOptimizer(Star):
                     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
                     paragraphs = dedupe_similar_paragraphs(paragraphs)
                     if len(paragraphs) > 1:
-                        logger.info(
-                            "[分段发送] 准备发送第 1/%d 条消息：\n%s",
-                            len(paragraphs),
-                            paragraphs[0],
-                        )
                         comp.text = paragraphs[0]
                         modified = True
                         delay_min, delay_max = self._get_delay_range()
