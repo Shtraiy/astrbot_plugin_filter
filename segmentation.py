@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import re
 from collections.abc import Iterable
 from difflib import SequenceMatcher
@@ -188,26 +187,8 @@ async def apply_segmentation_and_style(text: str, context, get_config) -> str:
     return _segment_text(text)
 
 
-async def send_followups(context, umo, paragraphs: list[str], delay_min: float, delay_max: float) -> None:
-    from astrbot.api.all import MessageChain
-
-    delay_min = max(0.0, float(delay_min))
-    delay_max = max(0.0, float(delay_max))
-    if delay_min > delay_max:
-        delay_min, delay_max = delay_max, delay_min
-    for i, para in enumerate(paragraphs):
-        delay = random.uniform(delay_min, delay_max)
-        await asyncio.sleep(delay)
-        try:
-            chain = MessageChain().message(para)
-            await context.send_message(umo, chain)
-            logger.info("[分段发送] 已发送第 %d/%d 条消息", i + 2, len(paragraphs) + 1)
-        except Exception:
-            logger.warning("[分段发送] 第 %d 条消息发送失败", i + 2, exc_info=True)
-
-
 def dedupe_similar_paragraphs(paragraphs: list[str]) -> list[str]:
-    """Collapse near-duplicate paragraphs before multi-message sending."""
+    """Collapse near-duplicate paragraphs for callers that need it."""
     unique: list[str] = []
     for para in paragraphs:
         if not para.strip():

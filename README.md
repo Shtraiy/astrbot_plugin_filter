@@ -1,6 +1,6 @@
 # AstrBot 语言逻辑优化大师
 
-一个用于 AstrBot 的输出后处理插件。在消息发送前清理模型输出中的内部痕迹，优化表达和排版，并支持智能分段、多消息发送与列表图片渲染。
+一个用于 AstrBot 的输出后处理插件。在消息发送前清理模型输出中的内部痕迹，优化表达和排版，并支持智能分段与列表图片渲染。
 
 ## 功能
 
@@ -11,7 +11,6 @@
 - 将工具函数名转换为更自然的中文描述
 - 使用规则或 LLM 优化 AI 味表达
 - 支持 LLM 智能分段，失败时自动降级到规则分段
-- 多消息发送前合并高度相似的重复段落
 - 同一群聊内按顺序发送不同用户的完整回复，避免消息交错
 - 可选：将编号列表渲染为图片发送
 - 群聊输入和输出内容防护，拦截配置词库命中及常见诱导绕过请求
@@ -67,10 +66,7 @@ pip install -r requirements.txt
 | `image_min_list_items` | int | `3` | 触发图片渲染的最少列表项数 |
 | `image_font_size` | int | `22` | 图片字体大小 |
 | `image_max_width` | int | `600` | 图片最大宽度 |
-| `multi_message` | bool | `true` | 是否将分段结果逐条发送 |
-| `delay_min` | float | `2.0` | 分段消息间隔下限，运行时限制在 2~5 秒 |
-| `delay_max` | float | `5.0` | 分段消息间隔上限，运行时限制在 2~5 秒 |
-| `gate_seconds` | float | `0.0` | 闸门时间：最后一条分段消息发送完成后，等待此时间再接受同一来源的新唤醒；`0` 表示发送完成后立即接受 |
+| `gate_seconds` | float | `0.0` | 闸门时间：回复消息发送完成后，等待此时间再接受同一来源的新唤醒；`0` 表示发送完成后立即接受 |
 | `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
 | `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
 | `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
@@ -105,7 +101,7 @@ astrbot_plugin_filter/
 ├── main.py              # 插件入口与输出流程编排
 ├── content_guard.py     # 输入/输出内容防护与诱导检测
 ├── pipelines.py         # 文本清理、脱敏和去 AI 味
-├── segmentation.py      # LLM/规则分段、重复检测和多消息发送
+├── segmentation.py      # LLM/规则分段和文风优化
 ├── image_renderer.py    # 列表图片渲染
 ├── _conf_schema.json     # AstrBot 配置项定义
 ├── metadata.yaml         # 插件元数据
@@ -124,14 +120,6 @@ astrbot_plugin_filter/
 ### LLM 分段没有生效
 
 确认已配置 `llm_provider_id`，并打开 `enable_llm_style`（默认开启）。插件会对每条正常非空回复尝试调用 LLM；调用失败、结果不合格或文本超出安全上限时自动降级，不影响普通规则处理。该功能会增加延迟和模型调用消耗。
-
-### 多消息发送顺序异常
-
-同一 `unified_msg_origin` 下的回复会串行处理。机器人从开始规划回复起锁定当前会话来源，直到最后一条消息发送完成并经过 `gate_seconds` 闸门时间；默认值为 `0`，即最后一条消息发送完成后立即接受新唤醒。其他会话来源不受影响。分段消息间隔固定限制在 2~5 秒范围内。
-
-### 控制台只显示回复的一段
-
-启用多消息分段后，AstrBot 的核心发送日志可能只显示首段；这是框架按单条消息记录的行为。插件不再在控制台输出完整回复或各段正文，聊天端仍按原配置分段发送。
 
 ### 群聊内容防护
 
