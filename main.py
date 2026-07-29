@@ -256,12 +256,18 @@ class LanguageLogicOptimizer(Star):
         pending = pending_sends.get(origin)
         if pending is None and isinstance(getattr(self, "_pending_send", None), tuple):
             pending = self._pending_send
-        if pending is None or not self._is_pending_send_event(event, pending):
+        if pending is not None and self._is_pending_send_event(event, pending):
+            pending_sends.pop(pending[0], None)
+            if self._pending_send is pending:
+                self._pending_send = None
+            self._finish_reply(pending[0], pending[1], pending[2])
             return
-        pending_sends.pop(pending[0], None)
-        if self._pending_send is pending:
-            self._pending_send = None
-        self._finish_reply(pending[0], pending[1], pending[2])
+
+        # Another plugin may stop on_decorating_result before this plugin can
+        # register a pending reply. Release the wake-up gate after that reply
+        # is sent, but keep a lock-owned follow-up sequence untouched.
+        if origin not in getattr(self, "_reply_locks", {}):
+            self._release_gate(event)
 
     def _get_config(self, key: str, default=None):
         context = getattr(self, "context", None)

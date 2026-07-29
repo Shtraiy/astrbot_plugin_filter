@@ -135,3 +135,19 @@ def test_gate_zero_releases_when_send_callback_uses_equivalent_event():
 
     assert not lock.locked()
     assert not optimizer._gate_is_active(callback_event)
+
+
+def test_after_message_sent_releases_gate_when_decorator_was_skipped():
+    optimizer = make_optimizer()
+    owner = FakeEvent(origin="group:1")
+    callback_event = FakeEvent(origin="group:1")
+    incoming = FakeEvent(origin="group:1")
+
+    async def run():
+        await optimizer.on_waiting_llm_request(owner)
+        await optimizer.after_message_sent(callback_event)
+        await optimizer.on_waiting_llm_request(incoming)
+
+    asyncio.run(run())
+
+    assert not incoming.stopped
