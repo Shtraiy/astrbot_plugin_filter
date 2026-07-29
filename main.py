@@ -346,8 +346,11 @@ class LanguageLogicOptimizer(Star):
             self._gates = {}
         key = self._gate_key(owner_event)
         state = self._gates.get(key)
-        if state is None or state.owner_event is not owner_event:
+        if state is None:
             return
+        # Hooks may receive a different event instance for the same source.
+        # The source key is the ownership boundary; requiring object identity
+        # here can leave a zero-second gate stuck forever.
         if apply_cooldown:
             cooldown = self._get_gate_seconds()
             if cooldown > 0:

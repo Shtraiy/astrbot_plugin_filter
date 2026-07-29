@@ -117,3 +117,21 @@ def test_cooldown_starts_after_the_actual_message_is_sent():
 
     assert not lock.locked()
     assert optimizer._gate_is_active()
+
+
+def test_gate_zero_releases_when_send_callback_uses_equivalent_event():
+    optimizer = make_optimizer()
+    owner = FakeEvent(origin="group:1")
+    callback_event = FakeEvent(origin="group:1")
+    lock = asyncio.Lock()
+
+    async def run():
+        await optimizer.on_waiting_llm_request(owner)
+        await lock.acquire()
+        optimizer._reply_locks["group:1"] = lock
+        optimizer._finish_reply("group:1", lock, callback_event)
+
+    asyncio.run(run())
+
+    assert not lock.locked()
+    assert not optimizer._gate_is_active(callback_event)
