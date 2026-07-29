@@ -54,6 +54,24 @@
     "hint": "渲染图片的最大宽度，超出会自动换行。",
     "default": 600
   },
+  "multi_message": {
+    "description": "多消息逐段发送",
+    "type": "bool",
+    "hint": "开启后将分段后的文本拆成多条消息。",
+    "default": true
+  },
+  "delay_min": {
+    "description": "消息间隔下限（秒）",
+    "type": "float",
+    "hint": "每条后续消息之间的最小间隔，运行时限制在 2~5 秒。",
+    "default": 2.0
+  },
+  "delay_max": {
+    "description": "消息间隔上限（秒）",
+    "type": "float",
+    "hint": "每条后续消息之间的最大间隔，运行时限制在 2~5 秒。",
+    "default": 5.0
+  },
   "gate_seconds": {
     "description": "闸门时间（秒）",
     "type": "float",

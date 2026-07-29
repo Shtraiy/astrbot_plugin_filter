@@ -30,7 +30,11 @@ from .pipelines import (
     remove_tool_narration,
     replace_user,
 )
-from .segmentation import apply_segmentation_and_style
+from .segmentation import (
+    apply_segmentation_and_style,
+    dedupe_similar_paragraphs,
+    send_followups,
+)
 
 
 @dataclass
@@ -109,6 +113,7 @@ class LanguageLogicOptimizer(Star):
 
             modified = False
             direct_send_completed = False
+            followups_scheduled = False
             guard_blocked = False
             pipeline_stats: dict[str, int] = {}
 
@@ -174,11 +179,39 @@ class LanguageLogicOptimizer(Star):
                         pipeline_stats["列表图片渲染"] = pipeline_stats.get("列表图片渲染", 0) + 1
                         continue
 
+                if self._get_config("multi_message", True):
+                    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+                    paragraphs = dedupe_similar_paragraphs(paragraphs)
+                    if len(paragraphs) > 1:
+                        comp.text = paragraphs[0]
+                        modified = True
+                        delay_min, delay_max = self._get_delay_range()
+                        task = asyncio.create_task(
+                            self._send_followups_and_release(
+                                reply_key,
+                                reply_lock,
+                                paragraphs[1:],
+                                delay_min,
+                                delay_max,
+                                event,
+                            )
+                        )
+                        self._track_task(task)
+                        lock_owned = False
+                        followups_scheduled = True
+                        continue
+                    if len(paragraphs) == 1 and paragraphs[0] != original:
+                        comp.text = paragraphs[0]
+                        modified = True
+                        continue
+
                 if text != original:
                     comp.text = text
                     modified = True
 
-            if direct_send_completed and not _has_pending_message(result.chain):
+            if followups_scheduled:
+                pass
+            elif direct_send_completed and not _has_pending_message(result.chain):
                 self._finish_reply(reply_key, reply_lock, event)
                 lock_owned = False
             elif _has_pending_message(result.chain):
@@ -199,6 +232,20 @@ class LanguageLogicOptimizer(Star):
         finally:
             if lock_owned and reply_key is not None and reply_lock is not None:
                 self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
+
+    async def _send_followups_and_release(
+        self,
+        reply_key: str,
+        reply_lock: asyncio.Lock,
+        paragraphs: list[str],
+        delay_min: float,
+        delay_max: float,
+        owner_event: AstrMessageEvent | None = None,
+    ) -> None:
+        try:
+            await send_followups(self.context, reply_key, paragraphs, delay_min, delay_max)
+        finally:
+            self._finish_reply(reply_key, reply_lock, owner_event)
 
     # Run before plugins such as meme_manager that may stop hook propagation.
     # This callback owns the response gate cleanup, so it must not be skipped.
@@ -402,6 +449,12 @@ class LanguageLogicOptimizer(Star):
             logger.info("[content_guard] blocked category=%s", category)
         except Exception:
             logger.warning("[content_guard] failed to send safe reply", exc_info=True)
+
+    def _get_delay_range(self) -> tuple[float, float]:
+        """Keep follow-up delays inside the requested 2-5 second window."""
+        delay_min = min(5.0, max(2.0, self._get_float_config("delay_min", 2.0)))
+        delay_max = min(5.0, max(2.0, self._get_float_config("delay_max", 5.0)))
+        return (delay_min, delay_max) if delay_min <= delay_max else (delay_max, delay_min)
 
     def _track_task(self, task: asyncio.Task) -> None:
         self._pending_tasks.add(task)

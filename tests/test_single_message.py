@@ -9,6 +9,12 @@ from main import LanguageLogicOptimizer
 class FakeContext:
     config = {}
 
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, origin, chain):
+        self.sent.append((origin, chain))
+
 
 class FakeEvent:
     unified_msg_origin = "group:1"
@@ -20,14 +26,15 @@ class FakeEvent:
         return self._result
 
 
-def test_paragraphs_stay_in_one_message_even_with_legacy_multi_message_config():
+def test_paragraphs_are_sent_as_separate_messages():
     optimizer = object.__new__(LanguageLogicOptimizer)
     optimizer.config = {
         "enable_content_guard": False,
         "enable_de_ai_flavor": False,
         "multi_message": True,
     }
-    optimizer.context = FakeContext()
+    context = FakeContext()
+    optimizer.context = context
     optimizer._reply_locks = {}
     optimizer._gates = {}
     optimizer._pending_sends = {}
@@ -36,6 +43,13 @@ def test_paragraphs_stay_in_one_message_even_with_legacy_multi_message_config():
     optimizer._pending_tasks = set()
     result = SimpleNamespace(chain=[Plain("first paragraph\n\nsecond paragraph")])
 
-    asyncio.run(optimizer.on_decorating_result(FakeEvent(result)))
+    optimizer._get_delay_range = lambda: (0.0, 0.0)
 
-    assert result.chain[0].text == "first paragraph\n\nsecond paragraph"
+    async def run():
+        await optimizer.on_decorating_result(FakeEvent(result))
+        await asyncio.sleep(0.01)
+
+    asyncio.run(run())
+
+    assert result.chain[0].text == "first paragraph"
+    assert len(context.sent) == 1

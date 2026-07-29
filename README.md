@@ -11,6 +11,7 @@
 - 将工具函数名转换为更自然的中文描述
 - 使用规则或 LLM 优化 AI 味表达
 - 支持 LLM 智能分段，失败时自动降级到规则分段
+- 将分段结果按多条消息发送，并自动合并高度相似的重复段落
 - 同一群聊内按顺序发送不同用户的完整回复，避免消息交错
 - 可选：将编号列表渲染为图片发送
 - 群聊输入和输出内容防护，拦截配置词库命中及常见诱导绕过请求
@@ -66,7 +67,10 @@ pip install -r requirements.txt
 | `image_min_list_items` | int | `3` | 触发图片渲染的最少列表项数 |
 | `image_font_size` | int | `22` | 图片字体大小 |
 | `image_max_width` | int | `600` | 图片最大宽度 |
-| `gate_seconds` | float | `0.0` | 闸门时间：回复消息发送完成后，等待此时间再接受同一来源的新唤醒；`0` 表示发送完成后立即接受 |
+| `multi_message` | bool | `true` | 是否将分段结果逐条发送；关闭后保留空行排版并合并为一条消息 |
+| `delay_min` | float | `2.0` | 分段消息间隔下限，运行时限制在 2~5 秒 |
+| `delay_max` | float | `5.0` | 分段消息间隔上限，运行时限制在 2~5 秒 |
+| `gate_seconds` | float | `0.0` | 闸门时间：最后一条消息发送完成后，等待此时间再接受同一来源的新唤醒；`0` 表示发送完成后立即接受 |
 | `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
 | `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
 | `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
@@ -101,7 +105,7 @@ astrbot_plugin_filter/
 ├── main.py              # 插件入口与输出流程编排
 ├── content_guard.py     # 输入/输出内容防护与诱导检测
 ├── pipelines.py         # 文本清理、脱敏和去 AI 味
-├── segmentation.py      # LLM/规则分段和文风优化
+├── segmentation.py      # LLM/规则分段、重复检测和多消息发送
 ├── image_renderer.py    # 列表图片渲染
 ├── _conf_schema.json     # AstrBot 配置项定义
 ├── metadata.yaml         # 插件元数据
