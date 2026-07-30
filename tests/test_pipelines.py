@@ -122,6 +122,14 @@ class TestFilterSensitive:
         assert 'Bearer eyJ' not in result
         assert 'BEGIN PRIVATE KEY' not in result
 
+    def test_redacts_secret_obfuscated_with_zero_width_character(self):
+        text = 'sk-proj-\u200b1234567890abcdef'
+
+        result = filter_sensitive(text)
+
+        assert 'sk-proj-' not in result
+        assert '1234567890abcdef' not in result
+
     def test_normal_text_unchanged(self):
         text = '你好，今天的天气真好。'
         result = filter_sensitive(text)

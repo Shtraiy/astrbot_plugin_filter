@@ -11,11 +11,14 @@ import pytest
 from segmentation import (
     _merge_orphan_colons,
     _split_dense_entries,
+    _split_long_para,
     _segment_text,
     _is_list_block,
     _SEGMENT_PROMPT,
     _STYLE_PROMPT,
     apply_segmentation_and_style,
+    try_llm_segment,
+    try_llm_style_optimize,
 )
 
 
@@ -55,6 +58,72 @@ def test_short_reply_is_sent_to_llm_style_optimizer():
     assert calls
     assert calls[0]["chat_provider_id"] == "siliconflow-test"
     assert result == "这是需要保留原意的短消息。"
+
+
+def test_llm_style_rejects_unrelated_same_length_rewrite():
+    class FakeContext:
+        async def llm_generate(self, **_kwargs):
+            return SimpleNamespace(completion_text="转发资料" * 10)
+
+    text = "天气很好" * 10
+    config = {
+        "enable_llm_style": True,
+        "llm_provider_id": "test-provider",
+    }
+
+    result = asyncio.run(
+        try_llm_style_optimize(
+            text,
+            FakeContext(),
+            lambda key, default: config.get(key, default),
+        )
+    )
+
+    assert result is None
+
+
+def test_llm_style_rejects_loss_of_protected_tokens():
+    class FakeContext:
+        async def llm_generate(self, **_kwargs):
+            return SimpleNamespace(completion_text="API_v2 将在 2026-07-31 发布，请查看说明。")
+
+    text = "API_v2 将在 2026-07-31 发布，详情见 https://example.com/docs。"
+    config = {
+        "enable_llm_style": True,
+        "llm_provider_id": "test-provider",
+    }
+
+    result = asyncio.run(
+        try_llm_style_optimize(
+            text,
+            FakeContext(),
+            lambda key, default: config.get(key, default),
+        )
+    )
+
+    assert result is None
+
+
+def test_llm_segmentation_rejects_non_formatting_changes():
+    class FakeContext:
+        async def llm_generate(self, **_kwargs):
+            return SimpleNamespace(completion_text=text.replace("甲", "乙", 1))
+
+    text = "甲" * 160
+    config = {
+        "enable_llm_segment": True,
+        "llm_provider_id": "test-provider",
+    }
+
+    result = asyncio.run(
+        try_llm_segment(
+            text,
+            FakeContext(),
+            lambda key, default: config.get(key, default),
+        )
+    )
+
+    assert result is None
 
 
 # ============================================================
@@ -229,7 +298,7 @@ class TestSegmentText:
         result = _segment_text(text)
         assert '今天天气' in result
         assert '公园散步' in result
-        assert '记得带水' in result
+        assert '记得带瓶水' in result
 
     def test_long_text_reduced_to_max_paras(self):
         """超多段落被合并到 _MAX_PARAS 以内"""

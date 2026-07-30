@@ -4,9 +4,10 @@ from main import LanguageLogicOptimizer
 
 
 class FakeEvent:
-    def __init__(self, wake=True, origin=""):
+    def __init__(self, wake=True, origin="", request_id=None):
         self.wake = wake
         self.unified_msg_origin = origin
+        self.request_id = request_id
         self.stopped = False
 
     def is_wake_up(self):
@@ -65,11 +66,12 @@ def test_new_wake_up_is_discarded_during_cooldown():
         await optimizer.on_waiting_llm_request(owner)
         optimizer._release_gate(owner, apply_cooldown=True)
         await optimizer.on_llm_request(incoming, None)
+        return optimizer._gate_is_active()
 
-    asyncio.run(run())
+    gate_is_active = asyncio.run(run())
 
     assert incoming.stopped
-    assert optimizer._gate_is_active()
+    assert gate_is_active
 
 
 def test_wake_up_is_accepted_after_cooldown_expires():
@@ -103,44 +105,46 @@ def test_wake_ups_in_different_origins_do_not_block_each_other():
 def test_cooldown_starts_after_the_actual_message_is_sent():
     optimizer = make_optimizer(3)
     owner = FakeEvent()
-    lock = asyncio.Lock()
 
     async def run():
+        lock = asyncio.Lock()
         await lock.acquire()
         await optimizer.on_waiting_llm_request(owner)
         pending = ("group:1", lock, owner)
         optimizer._pending_send = pending
         optimizer._pending_sends["group:1"] = pending
         await optimizer.after_message_sent(owner)
+        return lock.locked(), optimizer._gate_is_active()
 
-    asyncio.run(run())
+    lock_is_locked, gate_is_active = asyncio.run(run())
 
-    assert not lock.locked()
-    assert optimizer._gate_is_active()
+    assert not lock_is_locked
+    assert gate_is_active
 
 
 def test_gate_zero_releases_when_send_callback_uses_equivalent_event():
     optimizer = make_optimizer()
-    owner = FakeEvent(origin="group:1")
-    callback_event = FakeEvent(origin="group:1")
-    lock = asyncio.Lock()
+    owner = FakeEvent(origin="group:1", request_id="request-1")
+    callback_event = FakeEvent(origin="group:1", request_id="request-1")
 
     async def run():
+        lock = asyncio.Lock()
         await optimizer.on_waiting_llm_request(owner)
         await lock.acquire()
         optimizer._reply_locks["group:1"] = lock
         optimizer._finish_reply("group:1", lock, callback_event)
+        return lock.locked(), optimizer._gate_is_active(callback_event)
 
-    asyncio.run(run())
+    lock_is_locked, gate_is_active = asyncio.run(run())
 
-    assert not lock.locked()
-    assert not optimizer._gate_is_active(callback_event)
+    assert not lock_is_locked
+    assert not gate_is_active
 
 
 def test_after_message_sent_releases_gate_when_decorator_was_skipped():
     optimizer = make_optimizer()
-    owner = FakeEvent(origin="group:1")
-    callback_event = FakeEvent(origin="group:1")
+    owner = FakeEvent(origin="group:1", request_id="request-1")
+    callback_event = FakeEvent(origin="group:1", request_id="request-1")
     incoming = FakeEvent(origin="group:1")
 
     async def run():
@@ -151,3 +155,19 @@ def test_after_message_sent_releases_gate_when_decorator_was_skipped():
     asyncio.run(run())
 
     assert not incoming.stopped
+
+
+def test_unrelated_same_origin_callback_does_not_release_gate():
+    optimizer = make_optimizer()
+    owner = FakeEvent(origin="group:1", request_id="request-1")
+    unrelated = FakeEvent(origin="group:1", request_id="request-2")
+    incoming = FakeEvent(origin="group:1", request_id="request-3")
+
+    async def run():
+        await optimizer.on_waiting_llm_request(owner)
+        await optimizer.after_message_sent(unrelated)
+        await optimizer.on_waiting_llm_request(incoming)
+
+    asyncio.run(run())
+
+    assert incoming.stopped

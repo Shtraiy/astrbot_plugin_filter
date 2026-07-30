@@ -74,9 +74,11 @@ _PREFIXED_SECRET_RE = re.compile(
     r"\b(?:sk|pk|rk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b|\bAKIA[0-9A-Z]{16}\b",
     re.IGNORECASE,
 )
+_SENSITIVE_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
 
 
 def filter_sensitive(text: str) -> str:
+    text = _SENSITIVE_ZERO_WIDTH_RE.sub("", text)
     text = _PRIVATE_KEY_BLOCK_RE.sub("[REDACTED]", text)
     text = _BEARER_TOKEN_RE.sub("Bearer [REDACTED]", text)
     text = _JWT_RE.sub("[REDACTED]", text)
@@ -169,7 +171,7 @@ def remove_tool_narration(text: str) -> str:
     out = []
     for para in text.split("\n\n"):
         kept = []
-        for sent in re.split("(?<=[\u3002\uff01\uff1f])\s*", para):
+        for sent in re.split(r"(?<=[\u3002\uff01\uff1f])\s*", para):
             s = sent.strip()
             if s and not (_TOOL_FUNCTION_NAMES.search(s) and _NARRATION_MARKERS.search(s)):
                 kept.append(s)
@@ -192,19 +194,34 @@ _AI_FILLER_PATTERNS = [
     re.compile("^\u603b\u7ed3\u4e00\u4e0b[\uff1a:,\uff0c\u3002]?$"),
 ]
 _AI_FILLER_PREFIXES = [
-    re.compile("^\u6211\u8fd9\u5c31\u628a.{0,35}(?:\u6574\u7406|\u68b3\u7406|\u5217\u51fa|\u603b\u7ed3|\u5f52\u7eb3|\u5206\u4eab|\u544a\u8bc9|\u4ecb\u7ecd|\u8bf4\u660e|\u89e3\u91ca).{0,10}?[\uff1a:]\s*"),
-    re.compile("^\u4ee5\u4e0b\u662f.{0,10}[\uff1a:]\s*"),
+    re.compile(r"^\u6211\u8fd9\u5c31\u628a.{0,35}(?:\u6574\u7406|\u68b3\u7406|\u5217\u51fa|\u603b\u7ed3|\u5f52\u7eb3|\u5206\u4eab|\u544a\u8bc9|\u4ecb\u7ecd|\u8bf4\u660e|\u89e3\u91ca).{0,10}?[\uff1a:]\s*"),
+    re.compile(r"^\u4ee5\u4e0b\u662f.{0,10}[\uff1a:]\s*"),
 ]
-_ACADEMIC_TRANSITION_RE = re.compile("(?:^|[\u3002\uff01\uff1f]\s*)(?:\u503c\u5f97\u6ce8\u610f\u7684\u662f|\u9700\u8981\u63d0\u9192\u7684\u662f|\u9700\u8981\u8bf4\u660e\u7684\u662f)[\uff1a:,\uff0c]?\s*")
-_STEP_PREFIX_RE = re.compile("\u7b2c?([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+)\u6b65\u662f\s*")
+_ACADEMIC_TRANSITION_RE = re.compile(
+    r"(^|[\u3002\uff01\uff1f]\s*)"
+    r"(?:\u503c\u5f97\u6ce8\u610f\u7684\u662f|\u9700\u8981\u63d0\u9192\u7684\u662f|"
+    r"\u9700\u8981\u8bf4\u660e\u7684\u662f|\u6b64\u5916)"
+    r"[\uff1a:,\uff0c]?\s*",
+    re.MULTILINE,
+)
+_BRACKET_NOTE_RE = re.compile(
+    r"[\uff08(]\s*(?:\u6ce8|\u5907\u6ce8|\u8bf4\u660e)\s*[\uff1a:]\s*"
+    r"([^\uff08\uff09()\n]{1,80})[\uff09)]"
+)
+_STEP_PREFIX_RE = re.compile(r"\u7b2c?([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+)\u6b65\u662f\s*")
 _NUMS = {"\u4e00": "1", "\u4e8c": "2", "\u4e09": "3", "\u56db": "4", "\u4e94": "5", "\u516d": "6", "\u4e03": "7", "\u516b": "8", "\u4e5d": "9", "\u5341": "10"}
 
 
 def de_ai_flavor(text: str) -> str:
     paras = []
     for para in text.split("\n\n"):
+        para = "\n".join(
+            line
+            for line in para.splitlines()
+            if not any(pattern.match(line.strip()) for pattern in _AI_FILLER_PATTERNS)
+        )
         kept = []
-        for sent in re.split("(?<=[\u3002\uff01\uff1f])\s*", para):
+        for sent in re.split(r"(?<=[\u3002\uff01\uff1f])\s*", para):
             s = sent.strip()
             if not s:
                 continue
@@ -218,10 +235,11 @@ def de_ai_flavor(text: str) -> str:
                 continue
             kept.append(stripped)
         para = "".join(kept)
-        para = _ACADEMIC_TRANSITION_RE.sub("", para)
+        para = _ACADEMIC_TRANSITION_RE.sub(lambda match: match.group(1), para)
+        para = _BRACKET_NOTE_RE.sub(r"\1", para)
         para = _STEP_PREFIX_RE.sub(lambda m: _NUMS.get(m.group(1), m.group(1)) + ". ", para)
-        para = re.sub("^\s*\u9996\u5148[\uff1a:,\uff0c]\s*", "", para)
-        para = re.sub("([\u3002\uff01\uff1f]\s*)(?:\u5176\u6b21|\u6700\u540e)[\uff1a:,\uff0c]\s*", r"\1", para)
+        para = re.sub(r"^\s*\u9996\u5148[\uff1a:,\uff0c]\s*", "", para)
+        para = re.sub(r"([\u3002\uff01\uff1f]\s*)(?:\u5176\u6b21|\u6700\u540e)[\uff1a:,\uff0c]\s*", r"\1", para)
         if para:
             paras.append(para)
     text = "\n\n".join(paras) if paras else text

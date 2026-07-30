@@ -25,17 +25,35 @@ class GuardDecision:
 
 
 _ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
+_CONFUSABLE_TRANSLATION = str.maketrans(
+    {
+        # Common Cyrillic lookalikes.
+        "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x",
+        "у": "y", "і": "i", "ј": "j", "к": "k", "м": "m", "т": "t",
+        "в": "b", "н": "h",
+        # Common Greek lookalikes.
+        "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ο": "o",
+        "ρ": "p", "τ": "t", "υ": "y", "χ": "x",
+    }
+)
 _RISK_TARGET_RE = re.compile(
     r"(?:敏感词|敏感内容|禁词|违禁词|违规词|不合适(?:的)?(?:词|内容)?|"
-    r"不该说|不能说|脏话|辱骂|违规表达)"
+    r"不该说|不能说|脏话|辱骂|违规表达|"
+    r"sensitive(?:word|content)|forbidden(?:word|content)|"
+    r"banned(?:word|content)|prohibited(?:word|content)|"
+    r"restricted(?:word|content)|offensive(?:word|content)|slur|insult)"
 )
 _INJECTION_RE = re.compile(
-    r"(?:忽略|无视|绕过|解除|关闭|不要遵守).{0,20}"
-    r"(?:规则|限制|审查|安全|过滤|审核|系统提示)"
+    r"(?:(?:忽略|无视|绕过|解除|关闭|不要遵守).{0,20}"
+    r"(?:规则|限制|审查|安全|过滤|审核|系统提示)|"
+    r"(?:ignore|bypass|disable|override|disregard|forget)[a-z0-9_]{0,32}"
+    r"(?:rules?|restrictions?|filters?|moderation|safety|systemprompt|polic(?:y|ies)|guardrails?))"
 )
 _OBFUSCATION_RE = re.compile(
-    r"(?:谐音|拆字|拼音|编码|解码|base64|空格|零宽字符).{0,20}"
-    r"(?:输出|说|复述|还原|生成|绕过)"
+    r"(?:(?:谐音|拆字|拼音|编码|解码|base64|空格|零宽字符).{0,20}"
+    r"(?:输出|说|复述|还原|生成|绕过)|"
+    r"(?:encode|decode|base64|homoglyph|leet|zerowidth|obfuscat)[a-z0-9_]{0,32}"
+    r"(?:output|repeat|restore|generate|bypass|word|content))"
 )
 
 
@@ -43,6 +61,7 @@ def normalize_for_scan(text: str) -> str:
     """Normalize common spacing and Unicode evasions before matching."""
     normalized = unicodedata.normalize("NFKC", text or "").casefold()
     normalized = _ZERO_WIDTH_RE.sub("", normalized)
+    normalized = normalized.translate(_CONFUSABLE_TRANSLATION)
     return "".join(
         char
         for char in normalized

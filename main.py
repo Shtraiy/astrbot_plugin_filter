@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -32,7 +33,7 @@ from .pipelines import (
 )
 from .segmentation import (
     apply_segmentation_and_style,
-    dedupe_similar_paragraphs,
+    prepare_multi_message_parts,
     send_followups,
 )
 
@@ -51,6 +52,7 @@ class _GateState:
 
 MAX_ONBOARDING_STATES = 4096
 MAX_GATE_STATES = 4096
+_EVENT_CORRELATION_FIELDS = ("request_id", "event_id", "message_id", "trace_id")
 
 
 class LanguageLogicOptimizer(Star):
@@ -97,6 +99,7 @@ class LanguageLogicOptimizer(Star):
         if not event:
             return
 
+        result = None
         reply_key = None
         reply_lock = None
         lock_owned = False
@@ -117,6 +120,7 @@ class LanguageLogicOptimizer(Star):
             guard_blocked = False
             pipeline_stats: dict[str, int] = {}
 
+            _coalesce_adjacent_plain_components(result.chain)
             prepared_plain: list[tuple[Plain, str, str]] = []
             for comp in result.chain:
                 if not isinstance(comp, Plain):
@@ -180,8 +184,7 @@ class LanguageLogicOptimizer(Star):
                         continue
 
                 if self._get_config("multi_message", True):
-                    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-                    paragraphs = dedupe_similar_paragraphs(paragraphs)
+                    paragraphs = prepare_multi_message_parts(text)
                     if len(paragraphs) > 1:
                         comp.text = paragraphs[0]
                         modified = True
@@ -229,6 +232,14 @@ class LanguageLogicOptimizer(Star):
 
         except Exception:
             logger.error("[语言优化] 输出处理失败", exc_info=True)
+            if result is not None and getattr(result, "chain", None) is not None:
+                try:
+                    _replace_chain_with_safe_reply(result.chain)
+                except Exception:
+                    logger.error("[语言优化] 安全回复替换失败，停止原始结果发送", exc_info=True)
+                    stopper = getattr(event, "stop_event", None)
+                    if callable(stopper):
+                        stopper()
         finally:
             if lock_owned and reply_key is not None and reply_lock is not None:
                 self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
@@ -317,7 +328,7 @@ class LanguageLogicOptimizer(Star):
         key = self._gate_key(event)
         if self._gate_is_active(event):
             state = self._gates.get(key)
-            if state is None or state.owner_event is not event:
+            if state is None or not self._events_correlate(state.owner_event, event):
                 event.stop_event()
                 return False
         if key not in self._gates:
@@ -334,7 +345,7 @@ class LanguageLogicOptimizer(Star):
     def _gate_is_active(self, event: AstrMessageEvent | None = None) -> bool:
         if not hasattr(self, "_gates"):
             self._gates = {}
-        now = asyncio.get_running_loop().time()
+        now = time.monotonic()
         expired = [
             key
             for key, state in self._gates.items()
@@ -354,22 +365,46 @@ class LanguageLogicOptimizer(Star):
         state = self._gates.get(key)
         if state is None:
             return
-        # Hooks may receive a different event instance for the same source.
-        # The source key is the ownership boundary; requiring object identity
-        # here can leave a zero-second gate stuck forever.
+        if state.owner_event is None or not self._events_correlate(
+            state.owner_event,
+            owner_event,
+        ):
+            return
         if apply_cooldown:
             cooldown = self._get_gate_seconds()
             if cooldown > 0:
                 state.owner_event = None
-                state.cooldown_until = asyncio.get_running_loop().time() + cooldown
+                state.cooldown_until = time.monotonic() + cooldown
                 return
         self._gates.pop(key, None)
 
     @staticmethod
-    def _is_pending_send_event(event: AstrMessageEvent, pending) -> bool:
-        if event is pending[2]:
+    def _event_correlation_ids(event: AstrMessageEvent | None) -> set[str]:
+        if event is None:
+            return set()
+        identifiers: set[str] = set()
+        for field in _EVENT_CORRELATION_FIELDS:
+            value = getattr(event, field, None)
+            if value is not None and str(value).strip():
+                identifiers.add(f"{field}:{value}")
+        return identifiers
+
+    @classmethod
+    def _events_correlate(
+        cls,
+        owner: AstrMessageEvent | None,
+        candidate: AstrMessageEvent | None,
+    ) -> bool:
+        if owner is candidate and owner is not None:
             return True
-        return getattr(event, "unified_msg_origin", None) == pending[0]
+        return bool(
+            cls._event_correlation_ids(owner)
+            & cls._event_correlation_ids(candidate)
+        )
+
+    @classmethod
+    def _is_pending_send_event(cls, event: AstrMessageEvent, pending) -> bool:
+        return cls._events_correlate(pending[2], event)
 
     def _finish_reply(
         self,
@@ -542,6 +577,24 @@ def _has_pending_message(chain) -> bool:
         else:
             return True
     return False
+
+
+def _coalesce_adjacent_plain_components(chain) -> None:
+    previous_plain = None
+    for comp in chain:
+        if not isinstance(comp, Plain):
+            previous_plain = None
+            continue
+        if previous_plain is None:
+            previous_plain = comp
+            continue
+        previous_plain.text = (previous_plain.text or "") + (comp.text or "")
+        comp.text = ""
+
+
+def _replace_chain_with_safe_reply(chain) -> None:
+    chain.clear()
+    chain.append(Plain(SAFE_REPLY))
 
 
 def _apply_pipeline(name: str, func, text: str, stats: dict[str, int]) -> tuple[str, bool]:

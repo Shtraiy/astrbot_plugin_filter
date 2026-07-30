@@ -67,7 +67,7 @@ pip install -r requirements.txt
 | `image_min_list_items` | int | `3` | 触发图片渲染的最少列表项数 |
 | `image_font_size` | int | `22` | 图片字体大小 |
 | `image_max_width` | int | `600` | 图片最大宽度 |
-| `multi_message` | bool | `true` | 是否将分段结果逐条发送；关闭后保留空行排版并合并为一条消息 |
+| `multi_message` | bool | `true` | 是否将分段结果逐条发送；单次回复最多发送 5 条消息，关闭后保留空行排版并合并为一条消息 |
 | `delay_min` | float | `2.0` | 分段消息间隔下限，运行时限制在 2~5 秒 |
 | `delay_max` | float | `5.0` | 分段消息间隔上限，运行时限制在 2~5 秒 |
 | `gate_seconds` | float | `0.0` | 闸门时间：最后一条消息发送完成后，等待此时间再接受同一来源的新唤醒；`0` 表示发送完成后立即接受 |
@@ -94,7 +94,8 @@ pip install Pillow
 ## 开发与测试
 
 ```bash
-python -m py_compile main.py pipelines.py segmentation.py image_renderer.py
+python -m pip install -r requirements-dev.txt
+python -m py_compile main.py content_guard.py pipelines.py segmentation.py image_renderer.py
 python -m pytest -q
 ```
 
@@ -110,6 +111,7 @@ astrbot_plugin_filter/
 ├── _conf_schema.json     # AstrBot 配置项定义
 ├── metadata.yaml         # 插件元数据
 ├── requirements.txt      # Python 依赖
+├── requirements-dev.txt  # 本地测试依赖
 ├── tests/                # 测试代码
 ├── LICENSE               # AGPL-3.0 许可证
 └── README.md
