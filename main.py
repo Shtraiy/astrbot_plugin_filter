@@ -53,6 +53,7 @@ class _GateState:
 MAX_ONBOARDING_STATES = 4096
 MAX_GATE_STATES = 4096
 _EVENT_CORRELATION_FIELDS = ("request_id", "event_id", "message_id", "trace_id")
+FILTER_REPLY_LOCK_EXTRA = "astrbot_plugin_filter_reply_lock"
 
 
 class LanguageLogicOptimizer(Star):
@@ -113,6 +114,15 @@ class LanguageLogicOptimizer(Star):
             reply_lock = self._reply_locks.setdefault(reply_key, asyncio.Lock())
             await reply_lock.acquire()
             lock_owned = True
+            set_extra = getattr(event, "set_extra", None)
+            if callable(set_extra):
+                try:
+                    set_extra(FILTER_REPLY_LOCK_EXTRA, reply_lock)
+                except Exception:
+                    logger.debug(
+                        "[语言优化] 无法向当前事件发布分段回复锁",
+                        exc_info=True,
+                    )
 
             modified = False
             direct_send_completed = False
