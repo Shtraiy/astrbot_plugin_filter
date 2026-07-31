@@ -1,597 +1,64 @@
-"""AstrBot plugin entry: optimize outgoing text before it is sent."""
+"""AstrBot plugin entry: strip Markdown syntax from outgoing text."""
 
 from __future__ import annotations
 
-import asyncio
-import math
-import time
-from collections.abc import Mapping
-from dataclasses import dataclass
-
 from astrbot.api import logger
-from astrbot.api.all import MessageChain
 from astrbot.api.event import AstrMessageEvent, filter as _event_filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
-from .content_guard import (
-    SAFE_REPLY,
-    evaluate_input,
-    evaluate_output,
-    is_group_origin,
-    parse_terms,
-)
-from .image_renderer import cleanup_temp_file, should_render_image, text_to_image
-from .pipelines import (
-    clean_garbage,
-    de_ai_flavor,
-    deidentify_tool_names,
-    filter_sensitive,
-    replace_tool_leakage,
-    remove_tool_narration,
-    replace_user,
-    strip_markdown,
-)
-from .segmentation import (
-    apply_segmentation_and_style,
-    prepare_multi_message_parts,
-    send_followups,
-)
-
-
-@dataclass
-class _OnboardingState:
-    started_at: float
-    message_count: int = 0
-
-
-@dataclass
-class _GateState:
-    owner_event: AstrMessageEvent | None
-    cooldown_until: float = 0.0
-
-
-MAX_ONBOARDING_STATES = 4096
-MAX_GATE_STATES = 4096
-_EVENT_CORRELATION_FIELDS = ("request_id", "event_id", "message_id", "trace_id")
-FILTER_REPLY_LOCK_EXTRA = "astrbot_plugin_filter_reply_lock"
+from .pipelines import strip_markdown
 
 
 class LanguageLogicOptimizer(Star):
-    """Optimize outgoing text by cleaning metadata, tool traces, style, and layout."""
+    """Strip common Markdown presentation syntax from outgoing messages."""
 
     def __init__(self, context: Context, config=None):
         super().__init__(context)
         self.config = config
-        self._pending_tasks: set[asyncio.Task] = set()
-        self._reply_locks: dict[str, asyncio.Lock] = {}
-        self._gates: dict[str, _GateState] = {}
-        self._pending_send: tuple[str, asyncio.Lock, AstrMessageEvent] | None = None
-        self._pending_sends: dict[str, tuple[str, asyncio.Lock, AstrMessageEvent]] = {}
-        self._onboarding_states: dict[str, _OnboardingState] = {}
-
-    @_event_filter.on_waiting_llm_request()
-    async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
-        """Discard a wake-up before it waits for AstrBot's session lock."""
-        self._claim_or_stop_wake_up(event)
-
-    @_event_filter.on_llm_request()
-    async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
-        """Fallback gate check immediately before the LLM request."""
-        if not self._claim_or_stop_wake_up(event):
-            return
-        if not self._get_config("enable_content_guard", True):
-            return
-
-        input_text = _extract_input_text(event, req)
-        if not input_text:
-            return
-
-        strict = self._touch_onboarding_state(event) or self._guard_mode() == "strict"
-        decision = evaluate_input(input_text, self._get_guard_terms(), strict=strict)
-        if not decision.blocked:
-            return
-
-        event.stop_event()
-        self._release_gate(event)
-        await self._send_guard_reply(event, decision.category)
 
     @_event_filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
+        """Filter Markdown syntax out of every plain-text component."""
         if not event:
             return
 
-        result = None
-        reply_key = None
-        reply_lock = None
-        lock_owned = False
         try:
             result = event.get_result()
-            if not result or not getattr(result, "chain", None):
-                self._release_gate(event)
-                return
-
-            reply_key = event.unified_msg_origin
-            reply_lock = self._reply_locks.setdefault(reply_key, asyncio.Lock())
-            await reply_lock.acquire()
-            lock_owned = True
-            set_extra = getattr(event, "set_extra", None)
-            if callable(set_extra):
-                try:
-                    set_extra(FILTER_REPLY_LOCK_EXTRA, reply_lock)
-                except Exception:
-                    logger.debug(
-                        "[语言优化] 无法向当前事件发布分段回复锁",
-                        exc_info=True,
-                    )
-
-            modified = False
-            direct_send_completed = False
-            followups_scheduled = False
-            guard_blocked = False
-            pipeline_stats: dict[str, int] = {}
-
-            _coalesce_adjacent_plain_components(result.chain)
-            prepared_plain: list[tuple[Plain, str, str]] = []
-            for comp in result.chain:
-                if not isinstance(comp, Plain):
-                    continue
-
-                original = comp.text or ""
-                text = original
-
-                text, _ = _apply_pipeline("清理元数据", clean_garbage, text, pipeline_stats)
-                text, _ = _apply_pipeline("替换用户称呼", replace_user, text, pipeline_stats)
-                text, _ = _apply_pipeline("过滤敏感信息", filter_sensitive, text, pipeline_stats)
-                text, _ = _apply_pipeline("拦截工具流程泄露", replace_tool_leakage, text, pipeline_stats)
-                text, _ = _apply_pipeline("清理工具叙述", remove_tool_narration, text, pipeline_stats)
-                text, _ = _apply_pipeline("工具名称脱敏", deidentify_tool_names, text, pipeline_stats)
-
-                if self._get_config("enable_de_ai_flavor", True):
-                    text, _ = _apply_pipeline("去除 AI 味", de_ai_flavor, text, pipeline_stats)
-
-                text, _ = await _apply_pipeline_async(
-                    "分段与文风优化",
-                    apply_segmentation_and_style,
-                    text,
-                    self.context,
-                    self._get_config,
-                    stats=pipeline_stats,
-                )
-                text, _ = _apply_pipeline("清理 Markdown", strip_markdown, text, pipeline_stats)
-                text, _ = _apply_pipeline("再次过滤敏感信息", filter_sensitive, text, pipeline_stats)
-
-                if self._get_config("enable_content_guard", True):
-                    decision = evaluate_output(
-                        text,
-                        self._get_guard_terms(),
-                        strict=self._guard_mode() == "strict" or self._onboarding_active(event),
-                    )
-                    if decision.blocked:
-                        text = SAFE_REPLY
-                        guard_blocked = True
-                        pipeline_stats["content_guard"] = pipeline_stats.get("content_guard", 0) + 1
-
-                prepared_plain.append((comp, original, text))
-
-            fallback_written = False
-            for comp, original, text in prepared_plain:
-                if guard_blocked:
-                    comp.text = SAFE_REPLY if not fallback_written else ""
-                    fallback_written = True
-                    modified = True
-                    continue
-
-                if self._get_config("enable_image_render", False) and should_render_image(text, self._get_config):
-                    image_path = await text_to_image(text, self._get_config)
-                    if image_path:
-                        img_chain = MessageChain().file_image(image_path)
-                        await self.context.send_message(event.unified_msg_origin, img_chain)
-                        cleanup_task = asyncio.create_task(cleanup_temp_file(image_path))
-                        self._track_task(cleanup_task)
-                        comp.text = ""
-                        direct_send_completed = True
-                        modified = True
-                        pipeline_stats["列表图片渲染"] = pipeline_stats.get("列表图片渲染", 0) + 1
-                        continue
-
-                if self._get_config("multi_message", True):
-                    paragraphs = prepare_multi_message_parts(text)
-                    if len(paragraphs) > 1:
-                        comp.text = paragraphs[0]
-                        modified = True
-                        delay_min, delay_max = self._get_delay_range()
-                        task = asyncio.create_task(
-                            self._send_followups_and_release(
-                                reply_key,
-                                reply_lock,
-                                paragraphs[1:],
-                                delay_min,
-                                delay_max,
-                                event,
-                            )
-                        )
-                        self._track_task(task)
-                        lock_owned = False
-                        followups_scheduled = True
-                        continue
-                    if len(paragraphs) == 1 and paragraphs[0] != original:
-                        comp.text = paragraphs[0]
-                        modified = True
-                        continue
-
-                if text != original:
-                    comp.text = text
-                    modified = True
-
-            if followups_scheduled:
-                pass
-            elif direct_send_completed and not _has_pending_message(result.chain):
-                self._finish_reply(reply_key, reply_lock, event)
-                lock_owned = False
-            elif _has_pending_message(result.chain):
-                pending = (reply_key, reply_lock, event)
-                self._pending_sends[reply_key] = pending
-                self._pending_send = pending
-                lock_owned = False
-            else:
-                self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
-                lock_owned = False
-
-            if modified:
-                active = [name for name, count in pipeline_stats.items() if count > 0]
-                logger.info("[语言优化] 已应用处理流程：%s", ", ".join(active) if active else "无")
-
         except Exception:
-            logger.error("[语言优化] 输出处理失败", exc_info=True)
-            if result is not None and getattr(result, "chain", None) is not None:
-                try:
-                    _replace_chain_with_safe_reply(result.chain)
-                except Exception:
-                    logger.error("[语言优化] 安全回复替换失败，停止原始结果发送", exc_info=True)
-                    stopper = getattr(event, "stop_event", None)
-                    if callable(stopper):
-                        stopper()
-        finally:
-            if lock_owned and reply_key is not None and reply_lock is not None:
-                self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
-
-    async def _send_followups_and_release(
-        self,
-        reply_key: str,
-        reply_lock: asyncio.Lock,
-        paragraphs: list[str],
-        delay_min: float,
-        delay_max: float,
-        owner_event: AstrMessageEvent | None = None,
-    ) -> None:
-        try:
-            await send_followups(self.context, reply_key, paragraphs, delay_min, delay_max)
-        finally:
-            self._finish_reply(reply_key, reply_lock, owner_event)
-
-    # Run before plugins such as meme_manager that may stop hook propagation.
-    # This callback owns the response gate cleanup, so it must not be skipped.
-    @_event_filter.after_message_sent(priority=1000)
-    async def after_message_sent(self, event: AstrMessageEvent) -> None:
-        origin = getattr(event, "unified_msg_origin", None)
-        pending_sends = getattr(self, "_pending_sends", {})
-        pending = pending_sends.get(origin)
-        if pending is None and isinstance(getattr(self, "_pending_send", None), tuple):
-            pending = self._pending_send
-        if pending is not None and self._is_pending_send_event(event, pending):
-            pending_sends.pop(pending[0], None)
-            if self._pending_send is pending:
-                self._pending_send = None
-            self._finish_reply(pending[0], pending[1], pending[2])
+            logger.error("[markdown] 无法读取回复结果", exc_info=True)
+            return
+        if not result or not getattr(result, "chain", None):
             return
 
-        # Another plugin may stop on_decorating_result before this plugin can
-        # register a pending reply. Release the wake-up gate after that reply
-        # is sent, but keep a lock-owned follow-up sequence untouched.
-        if origin not in getattr(self, "_reply_locks", {}):
-            self._release_gate(event)
+        chain = result.chain
+        _coalesce_adjacent_plain_components(chain)
 
-    def _get_config(self, key: str, default=None):
-        context = getattr(self, "context", None)
-        for source in (getattr(self, "config", None), getattr(context, "config", None)):
-            if source is None:
+        changed = False
+        for comp in chain:
+            if not isinstance(comp, Plain):
                 continue
-            value = _read_config_value(source, key, _MISSING)
-            if value is not _MISSING:
-                return value
-        return default
-
-    def _get_float_config(self, key: str, default: float) -> float:
-        value = self._get_config(key, default)
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
-    def _get_gate_seconds(self) -> float:
-        configured = self._get_config("gate_seconds", _MISSING)
-        if configured is _MISSING:
-            configured = self._get_config("cooldown_seconds", 0.0)
-        try:
-            value = float(configured)
-        except (TypeError, ValueError):
-            return 0.0
-        return value if math.isfinite(value) and value > 0 else 0.0
-
-    def _get_cooldown_seconds(self) -> float:
-        """Backward-compatible alias for older configurations and callers."""
-        return self._get_gate_seconds()
-
-    def _event_is_wake_up(self, event: AstrMessageEvent) -> bool:
-        checker = getattr(event, "is_wake_up", None)
-        if callable(checker):
+            original = comp.text or ""
+            if not original:
+                continue
             try:
-                return bool(checker())
+                cleaned = strip_markdown(original)
             except Exception:
-                return True
-        return bool(checker) if checker is not None else True
+                logger.error("[markdown] 清洗失败，保留原文", exc_info=True)
+                continue
+            if cleaned != original:
+                if not cleaned:
+                    # 清洗结果为空（如整条消息只有 "---"）时保留原文，避免发送空消息
+                    continue
+                comp.text = cleaned
+                changed = True
 
-    def _claim_or_stop_wake_up(self, event: AstrMessageEvent) -> bool:
-        if not event or not self._event_is_wake_up(event):
-            return True
-        if not hasattr(self, "_gates"):
-            self._gates = {}
-        key = self._gate_key(event)
-        if self._gate_is_active(event):
-            state = self._gates.get(key)
-            if state is None or not self._events_correlate(state.owner_event, event):
-                event.stop_event()
-                return False
-        if key not in self._gates:
-            if len(self._gates) >= MAX_GATE_STATES:
-                event.stop_event()
-                return False
-            self._gates[key] = _GateState(owner_event=event)
-        return True
-
-    def _gate_key(self, event: AstrMessageEvent) -> str:
-        origin = str(getattr(event, "unified_msg_origin", "") or "")
-        return origin or "__unified_default__"
-
-    def _gate_is_active(self, event: AstrMessageEvent | None = None) -> bool:
-        if not hasattr(self, "_gates"):
-            self._gates = {}
-        now = time.monotonic()
-        expired = [
-            key
-            for key, state in self._gates.items()
-            if state.owner_event is None and state.cooldown_until <= now
-        ]
-        for key in expired:
-            self._gates.pop(key, None)
-        if event is None:
-            return bool(self._gates)
-        state = self._gates.get(self._gate_key(event))
-        return state is not None
-
-    def _release_gate(self, owner_event: AstrMessageEvent, apply_cooldown: bool = False) -> None:
-        if not hasattr(self, "_gates"):
-            self._gates = {}
-        key = self._gate_key(owner_event)
-        state = self._gates.get(key)
-        if state is None:
-            return
-        if state.owner_event is None or not self._events_correlate(
-            state.owner_event,
-            owner_event,
-        ):
-            return
-        if apply_cooldown:
-            cooldown = self._get_gate_seconds()
-            if cooldown > 0:
-                state.owner_event = None
-                state.cooldown_until = time.monotonic() + cooldown
-                return
-        self._gates.pop(key, None)
-
-    @staticmethod
-    def _event_correlation_ids(event: AstrMessageEvent | None) -> set[str]:
-        if event is None:
-            return set()
-        identifiers: set[str] = set()
-        for field in _EVENT_CORRELATION_FIELDS:
-            value = getattr(event, field, None)
-            if value is not None and str(value).strip():
-                identifiers.add(f"{field}:{value}")
-        return identifiers
-
-    @classmethod
-    def _events_correlate(
-        cls,
-        owner: AstrMessageEvent | None,
-        candidate: AstrMessageEvent | None,
-    ) -> bool:
-        if owner is candidate and owner is not None:
-            return True
-        return bool(
-            cls._event_correlation_ids(owner)
-            & cls._event_correlation_ids(candidate)
-        )
-
-    @classmethod
-    def _is_pending_send_event(cls, event: AstrMessageEvent, pending) -> bool:
-        return cls._events_correlate(pending[2], event)
-
-    def _finish_reply(
-        self,
-        reply_key: str,
-        reply_lock: asyncio.Lock,
-        owner_event: AstrMessageEvent | None = None,
-        apply_cooldown: bool = True,
-    ) -> None:
-        if reply_lock.locked():
-            reply_lock.release()
-        if self._reply_locks.get(reply_key) is reply_lock:
-            self._reply_locks.pop(reply_key, None)
-        if owner_event is not None:
-            self._release_gate(owner_event, apply_cooldown=apply_cooldown)
-
-    def _get_guard_terms(self) -> list[str]:
-        return parse_terms(self._get_config("content_guard_block_terms", ""))
-
-    def _guard_mode(self) -> str:
-        value = str(self._get_config("content_guard_mode", "balanced") or "balanced").lower()
-        return value if value in {"balanced", "strict"} else "balanced"
-
-    def _is_group_event(self, event: AstrMessageEvent) -> bool:
-        if is_group_origin(getattr(event, "unified_msg_origin", None)):
-            return True
-        return bool(getattr(event, "group_id", None))
-
-    def _touch_onboarding_state(self, event: AstrMessageEvent) -> bool:
-        if not self._is_group_event(event):
-            return False
-        origin = str(getattr(event, "unified_msg_origin", "") or "")
-        if not origin:
-            return False
-        now = asyncio.get_running_loop().time()
-        self._prune_onboarding_states(now)
-        state = self._onboarding_states.get(origin)
-        if state is None:
-            if len(self._onboarding_states) >= MAX_ONBOARDING_STATES:
-                oldest = min(
-                    self._onboarding_states.items(),
-                    key=lambda item: item[1].started_at,
-                )[0]
-                self._onboarding_states.pop(oldest, None)
-            state = _OnboardingState(started_at=now)
-            self._onboarding_states[origin] = state
-        state.message_count += 1
-        return self._onboarding_active(event)
-
-    def _onboarding_duration_seconds(self) -> float:
-        value = self._get_float_config("onboarding_guard_minutes", 30.0)
-        return max(0.0, value * 60) if math.isfinite(value) else 0.0
-
-    def _onboarding_message_limit(self) -> int:
-        value = self._get_float_config("onboarding_guard_messages", 20)
-        return max(0, int(value)) if math.isfinite(value) else 0
-
-    def _prune_onboarding_states(self, now: float) -> None:
-        duration = self._onboarding_duration_seconds()
-        message_limit = self._onboarding_message_limit()
-        for origin, state in list(self._onboarding_states.items()):
-            elapsed_active = duration > 0 and now - state.started_at < duration
-            count_active = message_limit > 0 and state.message_count <= message_limit
-            if not (elapsed_active or count_active):
-                self._onboarding_states.pop(origin, None)
-
-    def _onboarding_active(self, event: AstrMessageEvent) -> bool:
-        if not self._is_group_event(event):
-            return False
-        origin = str(getattr(event, "unified_msg_origin", "") or "")
-        state = self._onboarding_states.get(origin)
-        if state is None:
-            return False
-        duration = self._onboarding_duration_seconds()
-        message_limit = self._onboarding_message_limit()
-        elapsed_active = duration > 0 and asyncio.get_running_loop().time() - state.started_at < duration
-        count_active = message_limit > 0 and state.message_count <= message_limit
-        return elapsed_active or count_active
-
-    async def _send_guard_reply(self, event: AstrMessageEvent, category: str) -> None:
-        origin = getattr(event, "unified_msg_origin", None)
-        sender = getattr(self.context, "send_message", None)
-        if not origin or not callable(sender):
-            return
-        try:
-            await sender(origin, MessageChain().message(SAFE_REPLY))
-            logger.info("[content_guard] blocked category=%s", category)
-        except Exception:
-            logger.warning("[content_guard] failed to send safe reply", exc_info=True)
-
-    def _get_delay_range(self) -> tuple[float, float]:
-        """Keep follow-up delays inside the requested 2-5 second window."""
-        delay_min = min(5.0, max(2.0, self._get_float_config("delay_min", 2.0)))
-        delay_max = min(5.0, max(2.0, self._get_float_config("delay_max", 5.0)))
-        return (delay_min, delay_max) if delay_min <= delay_max else (delay_max, delay_min)
-
-    def _track_task(self, task: asyncio.Task) -> None:
-        self._pending_tasks.add(task)
-        task.add_done_callback(self._pending_tasks.discard)
-        task.add_done_callback(_log_task_exception)
-
-
-_MISSING = object()
-
-
-def _read_config_value(source, key: str, default):
-    if isinstance(source, Mapping):
-        return source.get(key, default)
-    getter = getattr(source, "get", None)
-    if callable(getter):
-        try:
-            return getter(key, default)
-        except TypeError:
-            try:
-                value = getter(key)
-            except Exception:
-                return default
-            return default if value is None else value
-        except Exception:
-            return default
-    return getattr(source, key, default)
-
-
-def _extract_input_text(event, req) -> str:
-    """Best-effort extraction of the user's raw message without reading system prompts."""
-    for source in (event, req):
-        if source is None:
-            continue
-        if isinstance(source, Mapping):
-            values = [source.get(name) for name in ("message_str", "user_message", "message", "raw_message")]
-        else:
-            values = []
-            for name in ("message_str", "user_message", "message", "raw_message"):
-                value = getattr(source, name, None)
-                if callable(value):
-                    try:
-                        value = value()
-                    except TypeError:
-                        value = None
-                    except Exception:
-                        value = None
-                values.append(value)
-            getter = getattr(source, "get_message_str", None)
-            if callable(getter):
-                try:
-                    values.insert(0, getter())
-                except Exception:
-                    pass
-        for value in values:
-            if isinstance(value, str) and value.strip():
-                return value
-    return ""
-
-
-def _log_task_exception(task: asyncio.Task) -> None:
-    try:
-        exc = task.exception()
-        if exc is not None:
-            logger.warning("[任务] 后台任务异常：%s", exc, exc_info=True)
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        pass
-
-
-def _has_pending_message(chain) -> bool:
-    for comp in chain:
-        if isinstance(comp, Plain):
-            if (comp.text or "").strip():
-                return True
-        else:
-            return True
-    return False
+        if changed:
+            logger.info("[markdown] 已过滤输出中的 Markdown 语法")
 
 
 def _coalesce_adjacent_plain_components(chain) -> None:
+    """Merge adjacent Plain components so Markdown split across them is seen."""
     previous_plain = None
     for comp in chain:
         if not isinstance(comp, Plain):
@@ -602,24 +69,3 @@ def _coalesce_adjacent_plain_components(chain) -> None:
             continue
         previous_plain.text = (previous_plain.text or "") + (comp.text or "")
         comp.text = ""
-
-
-def _replace_chain_with_safe_reply(chain) -> None:
-    chain.clear()
-    chain.append(Plain(SAFE_REPLY))
-
-
-def _apply_pipeline(name: str, func, text: str, stats: dict[str, int]) -> tuple[str, bool]:
-    result = func(text)
-    if result != text:
-        stats[name] = stats.get(name, 0) + 1
-        return result, True
-    return text, False
-
-
-async def _apply_pipeline_async(name: str, func, text: str, *args, stats: dict[str, int]) -> tuple[str, bool]:
-    result = await func(text, *args)
-    if result != text:
-        stats[name] = stats.get(name, 0) + 1
-        return result, True
-    return text, False
