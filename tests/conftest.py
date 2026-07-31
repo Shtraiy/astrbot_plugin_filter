@@ -28,6 +28,22 @@ def _install_astrbot_stubs() -> None:
 
     components_mod.Plain = Plain
 
+    all_mod = types.ModuleType("astrbot.api.all")
+
+    class MessageChain:
+        def __init__(self):
+            self.chain = []
+
+        def message(self, value):
+            self.chain.append(Plain(value))
+            return self
+
+        def file_image(self, value):
+            self.chain.append(value)
+            return self
+
+    all_mod.MessageChain = MessageChain
+
     event_mod = types.ModuleType("astrbot.api.event")
 
     class AstrMessageEvent:
@@ -53,6 +69,7 @@ def _install_astrbot_stubs() -> None:
         {
             "astrbot": astrbot,
             "astrbot.api": api,
+            "astrbot.api.all": all_mod,
             "astrbot.api.event": event_mod,
             "astrbot.api.message_components": components_mod,
             "astrbot.api.star": star_mod,
@@ -70,7 +87,10 @@ def _import_plugin_as_package() -> None:
         sys.modules[package_name] = package
 
     for module_name in (
+        "content_guard",
+        "image_renderer",
         "pipelines",
+        "segmentation",
         "main",
     ):
         module = importlib.import_module(f"{package_name}.{module_name}")

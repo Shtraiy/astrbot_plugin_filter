@@ -1,21 +1,46 @@
-# AstrBot 输出 Markdown 过滤插件
+# AstrBot 语言逻辑优化大师
 
-一个用于 AstrBot 的输出后处理插件：在消息发送前过滤掉常见的 Markdown 特殊语法，转换为适合聊天窗口展示的纯文本。
+一个用于 AstrBot 的输出后处理插件。在消息发送前清理模型输出中的内部痕迹，优化表达和排版，并支持智能分段与列表图片渲染。
 
 ## 功能
 
-- 去掉标题（`#`）、引用（`>`）、分隔线（`---`）等行级标记
-- 去掉粗体、斜体、删除线标记，保留文字内容
-- 链接 `[文字](url)` 和图片 `![alt](url)` 只保留文字 / alt
-- 代码块与行内代码去掉反引号，代码内容原样保留（内部的 `**` 等不会被误删）
-- 无序列表转换为 `•` 前缀
-- 保留有序列表、数学符号、未闭合的星号/下划线等非 Markdown 内容
+- 清理 OneBot、MCP 等结构化元数据泄漏
+- 过滤系统路径、Shell 命令、内网 IP、API Key 等敏感信息
+- 检测到工具调用流程泄露时，直接替换为正常的用户可见提示
+- 删除工具调用过程中的内部叙述
+- 将工具函数名转换为更自然的中文描述
+- 使用规则或 LLM 优化 AI 味表达
+- 支持 LLM 智能分段，失败时自动降级到规则分段
+- 将常见 Markdown 语法转换为适合 QQ 展示的纯文本
+- 将分段结果按多条消息发送，并自动合并高度相似的重复段落
+- 同一群聊内按顺序发送不同用户的完整回复，避免消息交错
+- 可选：将编号列表渲染为图片发送
+- 群聊输入和输出内容防护，拦截配置词库命中及常见诱导绕过请求
+- 新群聊在一段时间或一定消息数内自动启用更严格的防护
+
+## 处理流程
+
+```text
+AstrBot 生成回复
+        |
+        v
+垃圾符号清理 -> 用户称呼替换 -> 敏感信息过滤
+        |
+        v
+工具叙述清理 -> 工具名脱敏 -> AI 味优化
+        |
+        v
+LLM 分段/文风优化 -> 规则分段降级 -> 重复段落合并
+        |
+        v
+Markdown 纯文本化 -> 按会话串行发送
+```
 
 ## 安装
 
 ### 通过 AstrBot 插件市场
 
-在 AstrBot 管理面板的插件市场中搜索"Markdown 语法过滤"，安装后重启 AstrBot。
+在 AstrBot 管理面板的插件市场中搜索“语言逻辑优化大师”，安装后重启 AstrBot。
 
 ### 手动安装
 
@@ -26,11 +51,40 @@ cd astrbot_plugin_filter
 pip install -r requirements.txt
 ```
 
-安装后重启 AstrBot。
+安装后重启 AstrBot，并在管理面板中打开插件配置。
 
 ## 配置
 
-无配置项。
+配置入口：`AstrBot 管理面板 -> 插件 -> 语言逻辑优化大师 -> 配置`
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | ---: | --- |
+| `llm_provider_id` | provider | 空 | LLM 分段和文风优化使用的模型 |
+| `enable_llm_style` | bool | `true` | 每条正常非空回复调用 LLM 润色，保留原意并适量删除八股文；需要配置 `llm_provider_id` |
+| `llm_timeout_seconds` | float | `15.0` | 单次 LLM 润色/分段最多等待时间；超时自动回退，最大 60 秒 |
+| `enable_llm_segment` | bool | `false` | 启用 LLM 语义分段 |
+| `enable_de_ai_flavor` | bool | `true` | 启用规则去 AI 味 |
+| `enable_image_render` | bool | `false` | 启用列表图片渲染 |
+| `image_min_list_items` | int | `3` | 触发图片渲染的最少列表项数 |
+| `image_font_size` | int | `22` | 图片字体大小 |
+| `image_max_width` | int | `600` | 图片最大宽度 |
+| `multi_message` | bool | `true` | 是否将分段结果逐条发送；单次回复最多发送 5 条消息，关闭后保留空行排版并合并为一条消息 |
+| `delay_min` | float | `2.0` | 分段消息间隔下限，运行时限制在 2~5 秒 |
+| `delay_max` | float | `5.0` | 分段消息间隔上限，运行时限制在 2~5 秒 |
+| `gate_seconds` | float | `0.0` | 闸门时间：最后一条消息发送完成后，等待此时间再接受同一来源的新唤醒；`0` 表示发送完成后立即接受 |
+| `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
+| `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
+| `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
+| `onboarding_guard_minutes` | float | `30.0` | 新群聊严格防护的持续时间，单位为分钟 |
+| `onboarding_guard_messages` | int | `20` | 新群聊严格防护覆盖的 LLM 请求次数 |
+
+当启用 LLM 功能时，需要先在 AstrBot 中配置可用的 LLM provider，并填写 `llm_provider_id`。LLM 不可用或输出不符合校验要求时，插件会自动使用规则处理。
+
+图片渲染需要 Pillow：
+
+```bash
+pip install Pillow
+```
 
 ## 兼容性
 
@@ -42,6 +96,7 @@ pip install -r requirements.txt
 
 ```bash
 python -m pip install -r requirements-dev.txt
+python -m py_compile main.py content_guard.py pipelines.py segmentation.py image_renderer.py
 python -m pytest -q
 ```
 
@@ -49,19 +104,37 @@ python -m pytest -q
 
 ```text
 astrbot_plugin_filter/
-├── main.py              # 插件入口：对回复中的纯文本应用 Markdown 过滤
-├── pipelines.py         # Markdown 特殊语法清洗
-├── _conf_schema.json    # AstrBot 配置项定义（无配置项）
-├── metadata.yaml        # 插件元数据
-├── requirements.txt     # 运行时依赖（无）
-├── requirements-dev.txt # 本地测试依赖
-├── tests/               # 测试代码
-└── LICENSE              # AGPL-3.0 许可协议
+├── main.py              # 插件入口与输出流程编排
+├── content_guard.py     # 输入/输出内容防护与诱导检测
+├── pipelines.py         # 文本清理、脱敏和去 AI 味
+├── segmentation.py      # LLM/规则分段、重复检测和多消息发送
+├── image_renderer.py    # 列表图片渲染
+├── _conf_schema.json     # AstrBot 配置项定义
+├── metadata.yaml         # 插件元数据
+├── requirements.txt      # Python 依赖
+├── requirements-dev.txt  # 本地测试依赖
+├── tests/                # 测试代码
+├── LICENSE               # AGPL-3.0 许可证
+└── README.md
 ```
 
-## 许可协议
+## 常见问题
 
-本项目采用 [GNU AGPL v3](./LICENSE) 许可协议。
+### 安装后没有生效
+
+确认 AstrBot 版本满足要求，重启 AstrBot，并在日志中检查插件是否成功加载。
+
+### LLM 分段没有生效
+
+确认已配置 `llm_provider_id`，并打开 `enable_llm_style`（默认开启）。插件会对每条正常非空回复尝试调用 LLM；调用失败、结果不合格或文本超出安全上限时自动降级，不影响普通规则处理。该功能会增加延迟和模型调用消耗。
+
+### 群聊内容防护
+
+内容防护在用户请求进入 LLM 前和机器人最终发送前各检查一次。词库配置支持每行一个词或短语，也支持逗号分隔；检测会忽略常见空格、标点、零宽字符和 Unicode 变形。命中高风险内容时，机器人不会复述原文，而是发送中性提示。词库应根据实际群规和运营场景维护，插件不会内置会变化的具体词表。
+
+## 许可证
+
+本项目采用 [GNU AGPL v3](./LICENSE) 许可证。
 
 ## 作者
 

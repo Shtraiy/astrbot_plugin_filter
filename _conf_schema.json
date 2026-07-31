@@ -1,1 +1,111 @@
-{}
+{
+  "llm_provider_id": {
+    "description": "分段/文风优化使用的 LLM 模型",
+    "type": "string",
+    "hint": "选择用于智能分段和文风优化的 LLM 模型。留空则只使用规则分段。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "enable_llm_style": {
+    "description": "启用 LLM 文风优化",
+    "type": "bool",
+    "hint": "开启后每条正常的非空回复都会调用 LLM，保留原意并删除适量八股文；需要配置 llm_provider_id。",
+    "default": true
+  },
+  "llm_timeout_seconds": {
+    "description": "LLM 单次请求超时时间（秒）",
+    "type": "float",
+    "hint": "文风润色或智能分段单次最多等待的时间；超时会自动回退到原文或规则处理，默认 15 秒，最大 60 秒。",
+    "default": 15.0
+  },
+  "enable_llm_segment": {
+    "description": "启用 LLM 智能分段",
+    "type": "bool",
+    "hint": "开启后使用 LLM 进行语义分段；关闭则使用规则分段。",
+    "default": false
+  },
+  "enable_de_ai_flavor": {
+    "description": "启用正则去 AI 味",
+    "type": "bool",
+    "hint": "清除常见公式化表达，例如“我来整理一下”“以下是”等。",
+    "default": true
+  },
+  "enable_image_render": {
+    "description": "启用图片渲染",
+    "type": "bool",
+    "hint": "检测到结构化列表时自动渲染为图片发送，需要 Pillow。",
+    "default": false
+  },
+  "image_min_list_items": {
+    "description": "触发图片渲染的最少列表项数",
+    "type": "int",
+    "hint": "文本包含不少于此数量的编号列表行时触发图片渲染。",
+    "default": 3
+  },
+  "image_font_size": {
+    "description": "图片字号（px）",
+    "type": "int",
+    "hint": "渲染图片使用的字体大小。",
+    "default": 22
+  },
+  "image_max_width": {
+    "description": "图片最大宽度（px）",
+    "type": "int",
+    "hint": "渲染图片的最大宽度，超出会自动换行。",
+    "default": 600
+  },
+  "multi_message": {
+    "description": "多消息逐段发送",
+    "type": "bool",
+    "hint": "开启后将分段后的文本拆成多条消息。",
+    "default": true
+  },
+  "delay_min": {
+    "description": "消息间隔下限（秒）",
+    "type": "float",
+    "hint": "每条后续消息之间的最小间隔，运行时限制在 2~5 秒。",
+    "default": 2.0
+  },
+  "delay_max": {
+    "description": "消息间隔上限（秒）",
+    "type": "float",
+    "hint": "每条后续消息之间的最大间隔，运行时限制在 2~5 秒。",
+    "default": 5.0
+  },
+  "gate_seconds": {
+    "description": "闸门时间（秒）",
+    "type": "float",
+    "hint": "当前会话来源在最后一条分段消息真正发送完成前始终锁定；发送完成后等待此时间再接受新的唤醒。设置为 0 表示发送完成后立即接受。",
+    "default": 0.0
+  },
+  "enable_content_guard": {
+    "description": "启用群聊内容防护",
+    "type": "bool",
+    "hint": "在 LLM 请求前和消息发送前拦截配置词库命中及常见诱导绕过请求。",
+    "default": true
+  },
+  "content_guard_mode": {
+    "description": "内容防护模式",
+    "type": "string",
+    "hint": "balanced 只拦截明确风险；strict 会在新群聊和可疑上下文中更积极地拦截。",
+    "default": "balanced"
+  },
+  "content_guard_block_terms": {
+    "description": "内容防护词库",
+    "type": "string",
+    "hint": "每行填写一个需要拦截的词或短语，也支持使用逗号分隔。源码不会内置会变化的具体词表。",
+    "default": ""
+  },
+  "onboarding_guard_minutes": {
+    "description": "新群聊严格防护时长（分钟）",
+    "type": "float",
+    "hint": "机器人首次处理该群消息后，在此时间内启用更严格的诱导检测；设置为 0 可关闭时间限制。",
+    "default": 30.0
+  },
+  "onboarding_guard_messages": {
+    "description": "新群聊严格防护消息数",
+    "type": "int",
+    "hint": "新群聊前多少次 LLM 请求启用严格防护；设置为 0 可关闭消息数限制。",
+    "default": 20
+  }
+}
