@@ -27,7 +27,11 @@ _GARBAGE_RE = re.compile(r"\[{text=|,\s*type\s*=\s*\\?text\s*\}|\]\s*\}|\[{|}]")
 
 
 def clean_garbage(text: str) -> str:
-    text = _GARBAGE_RE.sub("", text).strip(" \n,[]{}")
+    original = text
+    text = _GARBAGE_RE.sub("", text)
+    # Only strip stray artifact brackets when an artifact was actually removed;
+    # otherwise a normal message ending in "]" or "}" must be preserved.
+    text = text.strip(" \n,[]{}") if text != original else text.strip()
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -64,6 +68,7 @@ _TASK_LIST_RE = re.compile(
 )
 _UNORDERED_LIST_RE = re.compile(r"^(?P<indent>[ \t]*)[-+*][ \t]+")
 _MARKDOWN_ESCAPE_RE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!>|~])")
+_MARKDOWN_CHARS_RE = re.compile(r"[\\`*_#+\-\[\]>|~]")
 
 
 def _stash_code(text: str) -> tuple[str, dict[str, str]]:
@@ -83,6 +88,10 @@ def strip_markdown(text: str) -> str:
     """Remove common Markdown presentation syntax while preserving content."""
     if not text:
         return text
+
+    # Fast path: no Markdown syntax characters at all, only normalize spacing.
+    if not _MARKDOWN_CHARS_RE.search(text):
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
 
     text, protected = _stash_code(text)
     text = _IMAGE_RE.sub(r"\1", text)
@@ -120,7 +129,7 @@ def strip_markdown(text: str) -> str:
     return text
 
 
-_AT_MENTION_RE = re.compile(r"^@(.+?)(?:\n|\s{2,}|$)")
+_AT_MENTION_RE = re.compile(r"^@([^\s，,。！？!?；;：:、]+)")
 
 
 def replace_user(text: str) -> str:
@@ -142,10 +151,14 @@ def replace_user(text: str) -> str:
     return re.sub(U_USER, lambda _m: name, text)
 
 _SYSTEM_PATH_RE = re.compile(r"(?:/AstrBot|/etc/|/var/|/root/|/tmp/|/opt/|/usr/|/proc/|/sys/|/dev/|/mnt/|/NAS/|/data/|[A-Za-z]:[\\/])[^\s\u3002\uff0c\uff01\uff1f\n]*", re.IGNORECASE)
-_SHELL_CMD_RE = re.compile(r"(?:^|[\s\u3002\uff01\uff1f])(?:shell_exec|bash\s+-c|sh\s+-c|cmd\.exe|powershell|sudo\s+|chmod\s+|chown\s+|pip\s+install|npm\s+install|python\d?\s+|node\s+|rm\s+-rf|git\s+(?:clone|push|pull)|wget\s+|curl\s+)[^\n\u3002\uff01\uff1f]{0,120}", re.IGNORECASE)
+_SHELL_CMD_RE = re.compile(r"(?:^|[\s\u3002\uff01\uff1f])(?:shell_exec|bash\s+-c|sh\s+-c|cmd\.exe|powershell|sudo\s+|chmod\s+|chown\s+|pip\s+install|npm\s+install|python\d?\s+[A-Za-z0-9_./\\-]+|node\s+[A-Za-z0-9_./\\-]+|rm\s+-rf|git\s+(?:clone|push|pull)|wget\s+|curl\s+)[^\n\u3002\uff01\uff1f]{0,120}", re.IGNORECASE)
 _INTERNAL_IP_RE = re.compile(r"\b(?:127\.0\.0\.\d+|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|localhost|0\.0\.0\.0)\b(?::\d+)?", re.IGNORECASE)
 _URL_RE = re.compile(r"\b(?:https?://)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?::\d+)?(?:/[^\s\u3002\uff0c\uff01\uff1f\"'\uff09)]*)?", re.IGNORECASE)
-_SYSTEM_INFO_LINE_RE = re.compile(r"(?:\u8fdb\u7a0b\u5217\u8868|\u8fd0\u884c\u8fdb\u7a0b|\u540e\u53f0\u8fdb\u7a0b|\u6570\u636e\u5e93\u8fde\u63a5|\u914d\u7f6e\u6587\u4ef6|\u73af\u5883\u53d8\u91cf|API.?key|access.?token|\u5bc6\u7801|password|secret|\.env\b|\.config\b|\.conf\b|\.ini\b)\S*", re.IGNORECASE)
+_SYSTEM_INFO_LINE_RE = re.compile(r"(?:\u8fdb\u7a0b\u5217\u8868|\u8fd0\u884c\u8fdb\u7a0b|\u540e\u53f0\u8fdb\u7a0b|\u6570\u636e\u5e93\u8fde\u63a5|\u914d\u7f6e\u6587\u4ef6|\u73af\u5883\u53d8\u91cf|API.?key|access.?token|password|secret|\.env\b|\.config\b|\.conf\b|\.ini\b)\S*", re.IGNORECASE)
+_FILE_EXT_RE = re.compile(
+    r"\.(?:py|pyw|pyc|js|ts|jsx|tsx|json|txt|md|markdown|yml|yaml|toml|ini|conf|cfg|log|csv|tsv|xml|html?|css|png|jpe?g|gif|webp|svg|ico|bmp|pdf|docx?|xlsx?|pptx?|zip|tar|gz|7z|rar|exe|msi|dll|so|dylib|sh|bat|ps1|sql|db|sqlite|lock|env|example)$",
+    re.IGNORECASE,
+)
 _PRIVATE_KEY_BLOCK_RE = re.compile(
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
     re.IGNORECASE | re.DOTALL,
@@ -153,7 +166,7 @@ _PRIVATE_KEY_BLOCK_RE = re.compile(
 _BEARER_TOKEN_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}", re.IGNORECASE)
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
 _ASSIGNED_SECRET_RE = re.compile(
-    r"(?P<prefix>\b(?:api[_ -]?key|access[_ -]?token|authorization|bearer|password|secret|private[_ -]?key|token)\s*[:=]\s*)"
+    r"(?P<prefix>(?:\b(?:api[_ -]?key|access[_ -]?token|authorization|bearer|password|secret|private[_ -]?key|token)\b|\u5bc6\u7801)\s*[:：=]\s*)"
     r"[\"']?[^\s,;\"']{8,}",
     re.IGNORECASE,
 )
@@ -174,14 +187,23 @@ def filter_sensitive(text: str) -> str:
         text,
     )
     text = _PREFIXED_SECRET_RE.sub("[REDACTED]", text)
-    text = _URL_RE.sub("[link]", text)
+    text = _URL_RE.sub(_redact_url, text)
     text = _SYSTEM_PATH_RE.sub("", text)
     text = _SHELL_CMD_RE.sub("", text)
     text = _INTERNAL_IP_RE.sub("", text)
     text = _SYSTEM_INFO_LINE_RE.sub("", text)
     return re.sub(r"[ \t]{2,}", " ", text)
 
-_NARRATION_MARKERS = re.compile("\u6211\u5148|\u8ba9\u6211|\u6211\u6765|\u6211\u9700\u8981|\u6211\u4eec\u9700\u8981|\u68c0\u67e5|\u786e\u8ba4|\u8c03\u7528|\u6267\u884c|\u8fd0\u884c|\u4f7f\u7528|\u901a\u8fc7|\u5de5\u5177|\u63a5\u53e3|\u547d\u4ee4|\u641c\u7d22|\u67e5\u8be2|\u68c0\u7d22|\u540e\u53f0|\u8fdb\u7a0b|\u914d\u7f6e|\u6570\u636e\u5e93")
+
+def _redact_url(match: re.Match) -> str:
+    """Replace URLs with [link] but keep bare filenames with common extensions."""
+    candidate = match.group(0)
+    if "://" not in candidate and "/" not in candidate and _FILE_EXT_RE.search(candidate):
+        return candidate
+    return "[link]"
+
+
+_NARRATION_MARKERS = re.compile("\u6211\u5148|\u8ba9\u6211|\u6211\u6765|\u6211\u9700\u8981|\u6211\u4eec\u9700\u8981|\u8c03\u7528|\u6267\u884c|\u8fd0\u884c|\u5de5\u5177|\u63a5\u53e3|\u547d\u4ee4|\u540e\u53f0|\u8fdb\u7a0b|\u914d\u7f6e|\u6570\u636e\u5e93")
 
 
 TOOL_LEAK_REPLACEMENT = "\u6211\u6b63\u5728\u5904\u7406\u8fd9\u4e2a\u8bf7\u6c42\uff0c\u8bf7\u7a0d\u7b49\u3002"
@@ -264,7 +286,7 @@ def remove_tool_narration(text: str) -> str:
                 kept.append(s)
         if kept:
             out.append("".join(kept))
-    return "\n\n".join(out) if out else text
+    return "\n\n".join(out)
 
 
 def deidentify_tool_names(text: str) -> str:
@@ -276,7 +298,6 @@ def deidentify_tool_names(text: str) -> str:
 
 _AI_FILLER_PATTERNS = [
     re.compile("^\u6211\u8fd9\u5c31\u628a.{0,35}(?:\u6574\u7406|\u68b3\u7406|\u5217\u51fa|\u603b\u7ed3|\u5f52\u7eb3|\u5206\u4eab|\u544a\u8bc9|\u4ecb\u7ecd|\u8bf4\u660e|\u89e3\u91ca).{0,10}?[\uff1a:\u3002\uff01]?$"),
-    re.compile("^\u4ee5\u4e0b\u662f.{0,10}[\uff1a:]?$"),
     re.compile("^\u4ee5\u4e0a\u5c31\u662f.{0,20}[\u3002\uff01]?$"),
     re.compile("^\u603b\u7ed3\u4e00\u4e0b[\uff1a:,\uff0c\u3002]?$"),
 ]
@@ -284,6 +305,7 @@ _AI_FILLER_PREFIXES = [
     re.compile(r"^\u6211\u8fd9\u5c31\u628a.{0,35}(?:\u6574\u7406|\u68b3\u7406|\u5217\u51fa|\u603b\u7ed3|\u5f52\u7eb3|\u5206\u4eab|\u544a\u8bc9|\u4ecb\u7ecd|\u8bf4\u660e|\u89e3\u91ca).{0,10}?[\uff1a:]\s*"),
     re.compile(r"^\u4ee5\u4e0b\u662f.{0,10}[\uff1a:]\s*"),
 ]
+_HEADING_LIKE_RE = re.compile(r"^(?:以下|以上)[^。！？\n]{1,20}[:：]$")
 _ACADEMIC_TRANSITION_RE = re.compile(
     r"(^|[\u3002\uff01\uff1f]\s*)"
     r"(?:\u503c\u5f97\u6ce8\u610f\u7684\u662f|\u9700\u8981\u63d0\u9192\u7684\u662f|"
@@ -311,6 +333,9 @@ def de_ai_flavor(text: str) -> str:
         for sent in re.split(r"(?<=[\u3002\uff01\uff1f])\s*", para):
             s = sent.strip()
             if not s:
+                continue
+            if _HEADING_LIKE_RE.match(s):
+                kept.append(s)
                 continue
             stripped = s
             for pat in _AI_FILLER_PREFIXES:

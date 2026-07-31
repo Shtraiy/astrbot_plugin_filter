@@ -10,7 +10,7 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
-_LIST_DETECT_RE = re.compile(r"^\s*\d+[\.\)?)]\s+\S", re.MULTILINE)
+_LIST_DETECT_RE = re.compile(r"^\s*\d+[.)）]\s+\S", re.MULTILINE)
 MAX_IMAGE_TEXT_CHARS = 50_000
 MAX_IMAGE_LINES = 500
 MAX_IMAGE_PIXELS = 12_000_000
@@ -67,7 +67,7 @@ def _count_structured_lines(lines: list[str]) -> int:
 
 
 def _auto_number_lines(lines: list[str]) -> list[str]:
-    numbered = sum(1 for line in lines if re.match(r"^\s*\d+[\.\)?)]", line))
+    numbered = sum(1 for line in lines if re.match(r"^\s*\d+[.)）]", line))
     total = len([line for line in lines if line.strip()])
     if total == 0 or numbered >= total * 0.5:
         return lines
@@ -78,7 +78,7 @@ def _auto_number_lines(lines: list[str]) -> list[str]:
         if not stripped:
             result.append(line)
             continue
-        if re.match(r"^\s*\d+[\.\)?)]", line):
+        if re.match(r"^\s*\d+[.)）]", line):
             result.append(line)
             continue
         if re.search("[\u3002\uFF01\uFF1F\uFF1A:]$", stripped) and len(stripped) < 50:

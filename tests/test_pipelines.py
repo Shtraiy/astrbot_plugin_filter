@@ -46,6 +46,11 @@ class TestCleanGarbage:
     def test_empty_string(self):
         assert clean_garbage('') == ''
 
+    def test_normal_text_with_trailing_brackets_unchanged(self):
+        assert clean_garbage("结果如下：[1, 2, 3]") == "结果如下：[1, 2, 3]"
+        assert clean_garbage("第三集 [BLAST]") == "第三集 [BLAST]"
+        assert clean_garbage("字典内容是 {a: 1}") == "字典内容是 {a: 1}"
+
 
 # ============================================================
 #  ② strip_markdown — Markdown 纯文本化
@@ -102,6 +107,12 @@ class TestStripMarkdown:
     def test_empty_text_is_unchanged(self):
         assert strip_markdown("") == ""
 
+    def test_plain_text_without_markdown_symbols_unchanged(self):
+        assert strip_markdown("你好，这是一条普通消息。") == "你好，这是一条普通消息。"
+
+    def test_plain_text_only_normalizes_whitespace(self):
+        assert strip_markdown("  hello  \n\n\nworld  ") == "hello  \n\nworld"
+
 
 # ============================================================
 #  ② replace_user — 昵称替换
@@ -136,6 +147,13 @@ class TestReplaceUser:
         text = '@test.user+*\n用户你好'
         result = replace_user(text)
         assert 'test.user+*' in result
+
+    def test_single_space_after_at_mention_does_not_duplicate(self):
+        text = "@用户 已处理完毕，请查收"
+        assert replace_user(text) == text
+
+    def test_replaces_user_after_single_space(self):
+        assert replace_user("@小红 用户想要查看番剧列表") == "@小红 小红想要查看番剧列表"
 
 
 # ============================================================
@@ -192,6 +210,27 @@ class TestFilterSensitive:
         result = filter_sensitive(text)
         assert '天气真好' in result
 
+    def test_keeps_common_file_extensions(self):
+        text = "请查看 config.json 和 main.py 文件"
+        result = filter_sensitive(text)
+        assert "config.json" in result
+        assert "main.py" in result
+
+    def test_keeps_prose_mentioning_python(self):
+        text = "可以用 python3 运行这个脚本"
+        assert filter_sensitive(text) == text
+
+    def test_keeps_prose_mentioning_password(self):
+        text = "请记得修改密码后重启服务"
+        assert filter_sensitive(text) == text
+
+    def test_redacts_assigned_chinese_password(self):
+        result = filter_sensitive("密码：12345678")
+        assert "12345678" not in result
+
+    def test_removes_python_command_with_script(self):
+        assert filter_sensitive("python3 main.py 运行成功") == ""
+
 
 # ============================================================
 #  ④ remove_tool_narration — 删除工具调用叙述句
@@ -218,6 +257,13 @@ class TestRemoveToolNarration:
         result = remove_tool_narration(text)
         # "让我想想" 是正常对话，不应删除（因为没有工具名同时出现）
         assert '让我想想' in result
+
+    def test_keeps_normal_instruction_with_git(self):
+        text = "使用 git 提交代码时请先拉取最新内容。以下是具体步骤："
+        assert remove_tool_narration(text) == text
+
+    def test_narration_only_message_returns_empty(self):
+        assert remove_tool_narration("我先用 es_search 搜索一下相关数据。") == ""
 
 
 # ============================================================
@@ -325,6 +371,10 @@ class TestDeAiFlavor:
         result = de_ai_flavor(text)
         assert '（注：需要管理员权限）' not in result
         assert '需要管理员权限' in result
+
+    def test_keeps_standalone_heading(self):
+        text = "以下是各季的播出时间：\n\n第一季：xxx"
+        assert de_ai_flavor(text) == text
 
     def test_normal_text_unchanged(self):
         text = '这家店的奶茶特别好喝，我每周都去！'

@@ -2,7 +2,14 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-import conftest  # noqa: F401 - installs the local AstrBot test stubs
+try:
+    import conftest  # noqa: F401 - installs the local AstrBot test stubs
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import conftest  # noqa: F401 - installs the local AstrBot test stubs
 from astrbot.api.message_components import Plain
 
 import main as filter_main
