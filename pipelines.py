@@ -54,6 +54,16 @@ _EM_STAR_RE = re.compile(
 _EM_UNDERSCORE_RE = re.compile(
     r"(?<![\w\\])_(?![\s_])(.+?)(?<![\s_])_(?!\w)"
 )
+_HORIZONTAL_RULE_RE = re.compile(
+    r"^[ \t]{0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$"
+)
+_HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
+_BLOCKQUOTE_RE = re.compile(r"^[ \t]{0,3}(?:>[ \t]?)+")
+_TASK_LIST_RE = re.compile(
+    r"^(?P<indent>[ \t]*)[-+*][ \t]+\[[ xX]\][ \t]+"
+)
+_UNORDERED_LIST_RE = re.compile(r"^(?P<indent>[ \t]*)[-+*][ \t]+")
+_MARKDOWN_ESCAPE_RE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!>|~])")
 
 
 def _stash_code(text: str) -> tuple[str, dict[str, str]]:
@@ -85,6 +95,26 @@ def strip_markdown(text: str) -> str:
         _EM_UNDERSCORE_RE,
     ):
         text = pattern.sub(r"\1", text)
+
+    lines: list[str] = []
+    for line in text.splitlines():
+        if _HORIZONTAL_RULE_RE.fullmatch(line):
+            continue
+        line = _HEADING_RE.sub("", line)
+        line = _BLOCKQUOTE_RE.sub("", line)
+        line = _TASK_LIST_RE.sub(
+            lambda match: f'{match.group("indent")}• ',
+            line,
+        )
+        line = _UNORDERED_LIST_RE.sub(
+            lambda match: f'{match.group("indent")}• ',
+            line,
+        )
+        lines.append(line)
+    text = "\n".join(lines)
+    text = _MARKDOWN_ESCAPE_RE.sub(r"\1", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
     for token, value in protected.items():
         text = text.replace(token, value)
     return text

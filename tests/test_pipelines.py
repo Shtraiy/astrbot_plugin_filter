@@ -74,6 +74,34 @@ class TestStripMarkdown:
 
         assert strip_markdown(text) == "运行 value = **raw**：\n# title\nprint('*')"
 
+    def test_normalizes_common_line_level_markdown(self):
+        text = (
+            "## 比赛信息\n"
+            "> 今晚开赛\n"
+            "---\n"
+            "- 第一场\n"
+            "* 第二场\n"
+            "+ [x] 已确认"
+        )
+
+        assert strip_markdown(text) == (
+            "比赛信息\n今晚开赛\n• 第一场\n• 第二场\n• 已确认"
+        )
+
+    def test_preserves_ordered_lists(self):
+        assert strip_markdown("1. 第一项\n2) 第二项") == "1. 第一项\n2) 第二项"
+
+    def test_preserves_non_markdown_asterisks_and_underscores(self):
+        text = "2 * 3 = 6，变量 snake_case，未闭合的 *星号"
+
+        assert strip_markdown(text) == text
+
+    def test_unescapes_markdown_punctuation_after_processing(self):
+        assert strip_markdown(r"\*不是斜体\* 和 \#普通井号") == "*不是斜体* 和 #普通井号"
+
+    def test_empty_text_is_unchanged(self):
+        assert strip_markdown("") == ""
+
 
 # ============================================================
 #  ② replace_user — 昵称替换
