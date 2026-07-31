@@ -33,6 +33,63 @@ def clean_garbage(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+_FENCED_CODE_RE = re.compile(
+    r"^[ \t]*(?P<fence>`{3,}|~{3,})[^\n]*\n"
+    r"(?P<code>.*?)\n?^[ \t]*(?P=fence)[ \t]*$",
+    re.MULTILINE | re.DOTALL,
+)
+_INLINE_CODE_RE = re.compile(
+    r"(?<!`)(?P<ticks>`+)(?!`)(?P<code>[^\n]*?)(?P=ticks)(?!`)"
+)
+_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^\n)]*\)")
+_LINK_RE = re.compile(r"\[([^\]]+)\]\([^\n)]*\)")
+_STRONG_STAR_RE = re.compile(r"(?<!\\)\*\*(?=\S)(.+?)(?<=\S)\*\*")
+_STRONG_UNDERSCORE_RE = re.compile(
+    r"(?<![\w\\])__(?=\S)(.+?)(?<=\S)__(?!\w)"
+)
+_STRIKE_RE = re.compile(r"(?<!\\)~~(?=\S)(.+?)(?<=\S)~~")
+_EM_STAR_RE = re.compile(
+    r"(?<![\*\\])\*(?![\s*])(.+?)(?<![\s*])\*(?!\*)"
+)
+_EM_UNDERSCORE_RE = re.compile(
+    r"(?<![\w\\])_(?![\s_])(.+?)(?<![\s_])_(?!\w)"
+)
+
+
+def _stash_code(text: str) -> tuple[str, dict[str, str]]:
+    protected: dict[str, str] = {}
+
+    def stash(value: str) -> str:
+        token = f"\ue000MD_CODE_{len(protected)}\ue001"
+        protected[token] = value
+        return token
+
+    text = _FENCED_CODE_RE.sub(lambda match: stash(match.group("code")), text)
+    text = _INLINE_CODE_RE.sub(lambda match: stash(match.group("code")), text)
+    return text, protected
+
+
+def strip_markdown(text: str) -> str:
+    """Remove common Markdown presentation syntax while preserving content."""
+    if not text:
+        return text
+
+    text, protected = _stash_code(text)
+    text = _IMAGE_RE.sub(r"\1", text)
+    text = _LINK_RE.sub(r"\1", text)
+    for pattern in (
+        _STRONG_STAR_RE,
+        _STRONG_UNDERSCORE_RE,
+        _STRIKE_RE,
+        _EM_STAR_RE,
+        _EM_UNDERSCORE_RE,
+    ):
+        text = pattern.sub(r"\1", text)
+    for token, value in protected.items():
+        text = text.replace(token, value)
+    return text
+
+
 _AT_MENTION_RE = re.compile(r"^@(.+?)(?:\n|\s{2,}|$)")
 
 

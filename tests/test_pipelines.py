@@ -6,6 +6,7 @@ import pytest
 
 from pipelines import (
     clean_garbage,
+    strip_markdown,
     replace_user,
     filter_sensitive,
     replace_tool_leakage,
@@ -44,6 +45,34 @@ class TestCleanGarbage:
 
     def test_empty_string(self):
         assert clean_garbage('') == ''
+
+
+# ============================================================
+#  ② strip_markdown — Markdown 纯文本化
+# ============================================================
+
+class TestStripMarkdown:
+    def test_unwraps_screenshot_style_bold_text(self):
+        text = "7月底到8月初正在打 **BLAST Bounty Summer 2026**（BLAST 赏金赛夏季赛）。"
+
+        assert strip_markdown(text) == (
+            "7月底到8月初正在打 BLAST Bounty Summer 2026（BLAST 赏金赛夏季赛）。"
+        )
+
+    def test_unwraps_common_inline_emphasis(self):
+        assert strip_markdown("**粗体**、*斜体*、__重点__、~~旧内容~~") == (
+            "粗体、斜体、重点、旧内容"
+        )
+
+    def test_keeps_link_labels_and_image_alt_text(self):
+        assert strip_markdown("看[赛程](https://example.com)和![海报](poster.png)") == (
+            "看赛程和海报"
+        )
+
+    def test_removes_code_delimiters_but_preserves_code_contents(self):
+        text = "运行 `value = **raw**`：\n```python\n# title\nprint('*')\n```"
+
+        assert strip_markdown(text) == "运行 value = **raw**：\n# title\nprint('*')"
 
 
 # ============================================================
