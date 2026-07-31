@@ -30,6 +30,7 @@ from .pipelines import (
     replace_tool_leakage,
     remove_tool_narration,
     replace_user,
+    strip_markdown,
 )
 from .segmentation import (
     apply_segmentation_and_style,
@@ -157,6 +158,7 @@ class LanguageLogicOptimizer(Star):
                     self._get_config,
                     stats=pipeline_stats,
                 )
+                text, _ = _apply_pipeline("清理 Markdown", strip_markdown, text, pipeline_stats)
                 text, _ = _apply_pipeline("再次过滤敏感信息", filter_sensitive, text, pipeline_stats)
 
                 if self._get_config("enable_content_guard", True):

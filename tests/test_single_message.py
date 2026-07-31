@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from astrbot.api.message_components import Plain
 
+import main as filter_main
 from main import LanguageLogicOptimizer
 
 
@@ -53,3 +54,30 @@ def test_paragraphs_are_sent_as_separate_messages():
 
     assert result.chain[0].text == "first paragraph"
     assert len(context.sent) == 1
+
+
+def test_markdown_from_post_processing_is_removed(monkeypatch):
+    optimizer = object.__new__(LanguageLogicOptimizer)
+    optimizer.config = {
+        "enable_content_guard": False,
+        "enable_de_ai_flavor": False,
+        "enable_image_render": False,
+        "multi_message": False,
+    }
+    optimizer.context = FakeContext()
+    optimizer._reply_locks = {}
+    optimizer._gates = {}
+    optimizer._pending_sends = {}
+    optimizer._pending_send = None
+    optimizer._onboarding_states = {}
+    optimizer._pending_tasks = set()
+    result = SimpleNamespace(chain=[Plain("original")])
+
+    async def add_markdown(*_args, **_kwargs):
+        return "赛程：**BLAST Bounty Summer 2026**"
+
+    monkeypatch.setattr(filter_main, "apply_segmentation_and_style", add_markdown)
+
+    asyncio.run(optimizer.on_decorating_result(FakeEvent(result)))
+
+    assert result.chain[0].text == "赛程：BLAST Bounty Summer 2026"
