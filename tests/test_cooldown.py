@@ -1,5 +1,6 @@
 import asyncio
 import time
+from types import SimpleNamespace
 from unittest import mock
 
 import main
@@ -7,10 +8,12 @@ from main import LanguageLogicOptimizer
 
 
 class FakeEvent:
-    def __init__(self, wake=True, origin="", request_id=None):
+    def __init__(self, wake=True, origin="", request_id=None, proactive=True, result=None):
         self.wake = wake
         self.unified_msg_origin = origin
         self.request_id = request_id
+        self.private_companion_proactive_framework = proactive
+        self._result = result
         self.stopped = False
 
     def is_wake_up(self):
@@ -18,6 +21,9 @@ class FakeEvent:
 
     def stop_event(self):
         self.stopped = True
+
+    def get_result(self):
+        return self._result
 
 
 def make_optimizer(cooldown_seconds=0):
@@ -69,6 +75,102 @@ def test_new_wake_up_is_discarded_while_reply_is_in_progress():
 
     assert not first.stopped
     assert second.stopped
+
+
+def test_real_user_message_passes_while_proactive_request_is_in_progress():
+    optimizer = make_optimizer()
+    proactive = FakeEvent(origin="default:FriendMessage:1", proactive=True)
+    user = FakeEvent(
+        origin="default:FriendMessage:1",
+        request_id="user-1",
+        proactive=False,
+    )
+
+    async def run():
+        await optimizer.on_waiting_llm_request(proactive)
+        await optimizer.on_waiting_llm_request(user)
+
+    asyncio.run(run())
+
+    assert not user.stopped
+    assert optimizer._gates["default:FriendMessage:1"].superseded_by_user
+
+
+def test_marked_proactive_duplicate_is_stopped():
+    optimizer = make_optimizer()
+    owner = FakeEvent(origin="group:1", proactive=True, request_id="pro-1")
+    duplicate = FakeEvent(origin="group:1", proactive=True, request_id="pro-2")
+
+    async def run():
+        await optimizer.on_waiting_llm_request(owner)
+        await optimizer.on_waiting_llm_request(duplicate)
+
+    asyncio.run(run())
+
+    assert duplicate.stopped
+
+
+def test_superseded_proactive_result_is_discarded_and_gate_released():
+    optimizer = make_optimizer()
+    result = SimpleNamespace(chain=[main.Plain("stale proactive reply")])
+    owner = FakeEvent(
+        origin="group:1",
+        request_id="pro-1",
+        proactive=True,
+        result=result,
+    )
+    user = FakeEvent(origin="group:1", request_id="user-1", proactive=False)
+
+    async def run():
+        await optimizer.on_waiting_llm_request(owner)
+        await optimizer.on_waiting_llm_request(user)
+        await optimizer.on_decorating_result(owner)
+
+    asyncio.run(run())
+
+    assert owner.stopped
+    assert result.chain == []
+    assert not optimizer._gate_is_active(owner)
+
+
+def test_private_companion_cancel_adapter_is_optional_and_best_effort():
+    optimizer = make_optimizer()
+    calls = []
+
+    class Api:
+        async def cancel_proactive_chat(self, session_id, *, token=""):
+            calls.append((session_id, token))
+
+    module = SimpleNamespace(get_private_companion_api=lambda: Api())
+
+    def import_module(_name):
+        return module
+
+    async def run():
+        with mock.patch.object(main.importlib, "import_module", side_effect=import_module):
+            await optimizer._cancel_private_companion_proactive("group:1", "token-1")
+
+    asyncio.run(run())
+
+    assert calls == [("group:1", "token-1")]
+
+
+def test_user_priority_requests_private_companion_cancel_only_once():
+    optimizer = make_optimizer()
+    owner = FakeEvent(origin="group:1", proactive=True)
+    user = FakeEvent(origin="group:1", request_id="user-1", proactive=False)
+    scheduled = []
+
+    optimizer._schedule_private_companion_cancel = lambda event: scheduled.append(event)
+
+    async def run():
+        await optimizer.on_waiting_llm_request(owner)
+        await optimizer.on_waiting_llm_request(user)
+        await optimizer.on_llm_request(user, None)
+
+    asyncio.run(run())
+
+    assert scheduled == [owner]
 
 
 def test_new_wake_up_is_discarded_during_cooldown():

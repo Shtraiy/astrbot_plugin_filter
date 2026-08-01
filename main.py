@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
+import inspect
 import math
 import time
 from collections.abc import Mapping
@@ -50,6 +52,8 @@ class _GateState:
     owner_event: AstrMessageEvent | None
     created_at: float = 0.0
     cooldown_until: float = 0.0
+    superseded_by_user: bool = False
+    cancel_requested: bool = False
 
 
 MAX_ONBOARDING_STATES = 4096
@@ -101,6 +105,9 @@ class LanguageLogicOptimizer(Star):
     @_event_filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
         if not event:
+            return
+
+        if self._discard_superseded_proactive_result(event):
             return
 
         result = None
@@ -341,8 +348,123 @@ class LanguageLogicOptimizer(Star):
                 return True
         return bool(checker) if checker is not None else True
 
+    @staticmethod
+    def _is_proactive_event(event: AstrMessageEvent | None) -> bool:
+        """Recognize explicit synthetic/proactive events without guessing from text."""
+        if event is None:
+            return False
+        markers = (
+            "private_companion_proactive_framework",
+            "_private_companion_external_proactive_source",
+            "_private_companion_proactive_chat_token",
+            "_private_companion_proactive_delivery_umo",
+        )
+        for marker in markers:
+            value = getattr(event, marker, None)
+            if isinstance(value, str):
+                if value.strip():
+                    return True
+            elif value:
+                return True
+
+        if type(event).__name__ == "SyntheticPrivateWakeEvent":
+            return True
+        metadata = getattr(event, "platform_meta", None)
+        description = str(getattr(metadata, "description", "") or "").strip().lower()
+        return description == "syntheticprivatewake"
+
+    def _mark_proactive_gate_superseded(self, event: AstrMessageEvent) -> None:
+        """Let a real user message pass and invalidate the older proactive owner."""
+        key = self._gate_key(event)
+        state = getattr(self, "_gates", {}).get(key)
+        if state is None or state.owner_event is None:
+            return
+        if not self._is_proactive_event(state.owner_event):
+            return
+        if self._events_correlate(state.owner_event, event):
+            return
+        state.superseded_by_user = True
+        logger.info(
+            "[语言优化] 用户消息优先：标记同源主动请求失效 origin=%s",
+            key,
+        )
+        if not state.cancel_requested:
+            state.cancel_requested = True
+            self._schedule_private_companion_cancel(state.owner_event)
+
+    def _discard_superseded_proactive_result(self, event: AstrMessageEvent) -> bool:
+        """Prevent a stale proactive response from being sent after user input."""
+        if not self._is_proactive_event(event):
+            return False
+        state = getattr(self, "_gates", {}).get(self._gate_key(event))
+        if state is None or not state.superseded_by_user:
+            return False
+        if not self._events_correlate(state.owner_event, event):
+            return False
+        result = getattr(event, "get_result", lambda: None)()
+        chain = getattr(result, "chain", None) if result is not None else None
+        if chain is not None:
+            result.chain = []
+        stopper = getattr(event, "stop_event", None)
+        if callable(stopper):
+            stopper()
+        self._release_gate(event, apply_cooldown=False)
+        logger.info(
+            "[语言优化] 已丢弃被用户消息取代的主动回复 origin=%s",
+            self._gate_key(event),
+        )
+        return True
+
+    def _schedule_private_companion_cancel(self, owner_event: AstrMessageEvent) -> None:
+        token = str(
+            getattr(owner_event, "_private_companion_proactive_chat_token", "") or ""
+        ).strip()
+        if not token:
+            return
+        try:
+            task = asyncio.create_task(
+                self._cancel_private_companion_proactive(
+                    str(getattr(owner_event, "unified_msg_origin", "") or ""),
+                    token,
+                )
+            )
+        except RuntimeError:
+            return
+        self._track_task(task)
+
+    async def _cancel_private_companion_proactive(self, session_id: str, token: str) -> None:
+        """Best-effort optional cancellation; never make it a hard dependency."""
+        module_names = (
+            "data.plugins.astrbot_plugin_private_companion.main",
+            "astrbot_plugin_private_companion.main",
+        )
+        for module_name in module_names:
+            try:
+                module = importlib.import_module(module_name)
+                getter = getattr(module, "get_private_companion_api", None)
+                api = getter() if callable(getter) else None
+                cancel = getattr(api, "cancel_proactive_chat", None)
+                if not callable(cancel):
+                    continue
+                result = cancel(session_id, token=token)
+                if inspect.isawaitable(result):
+                    await result
+                logger.info(
+                    "[语言优化] 已请求 Private Companion 取消过时主动回复 origin=%s",
+                    session_id,
+                )
+                return
+            except Exception:
+                logger.debug(
+                    "[语言优化] Private Companion 主动回复取消失败，继续按本地失效标记处理",
+                    exc_info=True,
+                )
+
     def _claim_or_stop_wake_up(self, event: AstrMessageEvent) -> bool:
         if not event or not self._event_is_wake_up(event):
+            return True
+        if not self._is_proactive_event(event):
+            self._mark_proactive_gate_superseded(event)
             return True
         if not hasattr(self, "_gates"):
             self._gates = {}
