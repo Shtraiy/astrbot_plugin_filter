@@ -1,5 +1,8 @@
 import asyncio
+import time
+from unittest import mock
 
+import main
 from main import LanguageLogicOptimizer
 
 
@@ -40,6 +43,17 @@ def test_gate_seconds_defaults_to_zero_and_overrides_legacy_setting():
 
     optimizer.config = {"gate_seconds": 2, "cooldown_seconds": 9}
     assert optimizer._get_gate_seconds() == 2.0
+
+
+def test_gate_ttl_default_is_positive_and_override_applies():
+    optimizer = make_optimizer()
+    assert optimizer._get_gate_ttl_seconds() == main.GATE_TTL_DEFAULT
+
+    optimizer.config["gate_ttl_seconds"] = 60
+    assert optimizer._get_gate_ttl_seconds() == 60.0
+
+    optimizer.config["gate_ttl_seconds"] = 0
+    assert optimizer._get_gate_ttl_seconds() == 0.0
 
 
 def test_new_wake_up_is_discarded_while_reply_is_in_progress():
@@ -100,6 +114,53 @@ def test_wake_ups_in_different_origins_do_not_block_each_other():
 
     assert not first.stopped
     assert not second.stopped
+
+
+def test_recent_owner_gate_still_discards_new_wake_up():
+    optimizer = make_optimizer()
+    owner = FakeEvent(origin="group:1", request_id="request-1")
+    incoming = FakeEvent(origin="group:1", request_id="request-2")
+
+    async def run():
+        await optimizer.on_waiting_llm_request(owner)
+        await optimizer.on_waiting_llm_request(incoming)
+        return incoming.stopped
+
+    assert asyncio.run(run())
+
+
+def test_stale_owner_gate_is_expired_and_new_wake_up_accepted():
+    optimizer = make_optimizer()
+    owner = FakeEvent(origin="group:1", request_id="request-1")
+    incoming = FakeEvent(origin="group:1", request_id="request-2")
+
+    async def run():
+        await optimizer.on_waiting_llm_request(owner)
+        future = time.monotonic() + main.GATE_TTL_DEFAULT * 2
+        with mock.patch("main.time.monotonic", return_value=future):
+            await optimizer.on_waiting_llm_request(incoming)
+        return incoming.stopped, optimizer._gates.get("group:1") is not None
+
+    stopped, has_gate = asyncio.run(run())
+
+    assert not stopped
+    assert has_gate
+
+
+def test_gate_ttl_zero_disables_stale_expiry():
+    optimizer = make_optimizer()
+    optimizer.config["gate_ttl_seconds"] = 0
+    owner = FakeEvent(origin="group:1", request_id="request-1")
+    incoming = FakeEvent(origin="group:1", request_id="request-2")
+
+    async def run():
+        await optimizer.on_waiting_llm_request(owner)
+        future = time.monotonic() + main.GATE_TTL_DEFAULT * 2
+        with mock.patch("main.time.monotonic", return_value=future):
+            await optimizer.on_waiting_llm_request(incoming)
+        return incoming.stopped
+
+    assert asyncio.run(run())
 
 
 def test_cooldown_starts_after_the_actual_message_is_sent():

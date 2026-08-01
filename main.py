@@ -48,11 +48,13 @@ class _OnboardingState:
 @dataclass
 class _GateState:
     owner_event: AstrMessageEvent | None
+    created_at: float = 0.0
     cooldown_until: float = 0.0
 
 
 MAX_ONBOARDING_STATES = 4096
 MAX_GATE_STATES = 4096
+GATE_TTL_DEFAULT = 300.0
 _EVENT_CORRELATION_FIELDS = ("request_id", "event_id", "message_id", "trace_id")
 FILTER_REPLY_LOCK_EXTRA = "astrbot_plugin_filter_reply_lock"
 
@@ -319,6 +321,13 @@ class LanguageLogicOptimizer(Star):
             return 0.0
         return value if math.isfinite(value) and value > 0 else 0.0
 
+    def _get_gate_ttl_seconds(self) -> float:
+        """Safety net: auto-release a gate whose owner reply never completes."""
+        value = self._get_float_config("gate_ttl_seconds", GATE_TTL_DEFAULT)
+        if not math.isfinite(value) or value <= 0:
+            return 0.0
+        return value
+
     def _get_cooldown_seconds(self) -> float:
         """Backward-compatible alias for older configurations and callers."""
         return self._get_gate_seconds()
@@ -341,13 +350,20 @@ class LanguageLogicOptimizer(Star):
         if self._gate_is_active(event):
             state = self._gates.get(key)
             if state is None or not self._events_correlate(state.owner_event, event):
+                logger.info(
+                    "[语言优化] 丢弃唤醒：同一来源仍有请求在途或处于冷却 origin=%s",
+                    key,
+                )
                 event.stop_event()
                 return False
         if key not in self._gates:
             if len(self._gates) >= MAX_GATE_STATES:
                 event.stop_event()
                 return False
-            self._gates[key] = _GateState(owner_event=event)
+            self._gates[key] = _GateState(
+                owner_event=event,
+                created_at=time.monotonic(),
+            )
         return True
 
     def _gate_key(self, event: AstrMessageEvent) -> str:
@@ -358,13 +374,26 @@ class LanguageLogicOptimizer(Star):
         if not hasattr(self, "_gates"):
             self._gates = {}
         now = time.monotonic()
+        ttl = self._get_gate_ttl_seconds()
         expired = [
             key
             for key, state in self._gates.items()
             if state.owner_event is None and state.cooldown_until <= now
+            or (
+                ttl > 0
+                and state.owner_event is not None
+                and state.created_at > 0
+                and now - state.created_at > ttl
+            )
         ]
         for key in expired:
-            self._gates.pop(key, None)
+            state = self._gates.pop(key, None)
+            if state is not None and state.owner_event is not None:
+                logger.warning(
+                    "[语言优化] 唤醒闸门超时自动释放 origin=%s 已持续=%.1f秒",
+                    key,
+                    now - state.created_at,
+                )
         if event is None:
             return bool(self._gates)
         state = self._gates.get(self._gate_key(event))
