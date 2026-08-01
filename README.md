@@ -141,3 +141,20 @@ astrbot_plugin_filter/
 
 - Shtraiy
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
+
+## Private Companion 联动
+
+2.6.3 起，本插件与 [Private Companion](https://github.com/menglimi/astrbot_plugin_private_companion) 协同处理主动消息：
+
+- 普通用户消息拥有优先权，不会因同源主动请求处于在途而被丢弃。
+- 识别到 Private Companion 的主动请求后，用户新消息会使旧请求失效，并尽力请求取消。
+- 旧主动请求的过时回复会被丢弃，避免在用户消息后又发送。
+- Private Companion 未安装、API 不可用或取消失败时，本插件会自动降级，不影响原有过滤功能。
+
+## 更新日志
+
+### 2.6.3
+
+- 修复同源冷却/门控导致真实用户消息被卡住或丢弃的问题。
+- 增加 Private Companion 主动请求识别、取消适配和过时回复抑制。
+- 增加用户优先、重复取消防护和相关回归测试。
