@@ -1,24 +1,32 @@
+<div align="center">
+
 # AstrBot 语言逻辑优化大师
 
-一个用于 AstrBot 的输出后处理插件。在消息发送前清理模型输出中的内部痕迹，优化表达和排版，并支持智能分段与列表图片渲染。
+[![version](https://img.shields.io/badge/version-v2.6.3-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
+[![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
-## 功能
+**清理 AstrBot 输出中的内部痕迹，优化表达排版，并支持智能分段与列表图片渲染**
+</div>
 
-- 清理 OneBot、MCP 等结构化元数据泄漏
-- 过滤系统路径、Shell 命令、内网 IP、API Key 等敏感信息
-- 检测到工具调用流程泄露时，直接替换为正常的用户可见提示
-- 删除工具调用过程中的内部叙述
-- 将工具函数名转换为更自然的中文描述
-- 使用规则或 LLM 优化 AI 味表达
-- 支持 LLM 智能分段，失败时自动降级到规则分段
-- 将常见 Markdown 语法转换为适合 QQ 展示的纯文本
-- 将分段结果按多条消息发送，并自动合并高度相似的重复段落
-- 同一群聊内按顺序发送不同用户的完整回复，避免消息交错
-- 可选：将编号列表渲染为图片发送
-- 群聊输入和输出内容防护，拦截配置词库命中及常见诱导绕过请求
-- 新群聊在一段时间或一定消息数内自动启用更严格的防护
+> **astrbot_plugin_filter** 是一个用于 AstrBot 的输出后处理插件，能够在消息发送前清理模型输出中的元数据、工具叙述和敏感信息，并提供 LLM 文风优化、智能分段、消息串行发送与列表图片渲染等能力。
 
-## 处理流程
+## 📌 主要能力
+
+- 清理 OneBot、MCP 等结构化元数据泄漏。
+- 过滤系统路径、Shell 命令、内网 IP、API Key 等敏感信息。
+- 检测到工具调用流程泄露时，直接替换为正常的用户可见提示。
+- 删除工具调用过程中的内部叙述，并将工具函数名转换为更自然的中文描述。
+- 使用规则或 LLM 优化 AI 味表达。
+- 支持 LLM 智能分段，失败时自动降级到规则分段。
+- 将常见 Markdown 语法转换为适合 QQ 展示的纯文本。
+- 将分段结果按多条消息发送，并自动合并高度相似的重复段落。
+- 同一群聊内按顺序发送不同用户的完整回复，避免消息交错。
+- 可选：将编号列表渲染为图片发送。
+- 防护群聊输入和输出内容，拦截配置词库命中及常见诱导绕过请求。
+- 新群聊在一段时间或一定消息数内自动启用更严格的防护。
+
+## 🔄 处理流程
 
 ```text
 AstrBot 生成回复
@@ -36,7 +44,7 @@ LLM 分段/文风优化 -> 规则分段降级 -> 重复段落合并
 Markdown 纯文本化 -> 按会话串行发送
 ```
 
-## 安装
+## 🚀 安装
 
 ### 通过 AstrBot 插件市场
 
@@ -53,7 +61,7 @@ pip install -r requirements.txt
 
 安装后重启 AstrBot，并在管理面板中打开插件配置。
 
-## 配置
+## ⚙️ 配置
 
 配置入口：`AstrBot 管理面板 -> 插件 -> 语言逻辑优化大师 -> 配置`
 
@@ -79,21 +87,21 @@ pip install -r requirements.txt
 | `onboarding_guard_minutes` | float | `30.0` | 新群聊严格防护的持续时间，单位为分钟 |
 | `onboarding_guard_messages` | int | `20` | 新群聊严格防护覆盖的 LLM 请求次数 |
 
-当启用 LLM 功能时，需要先在 AstrBot 中配置可用的 LLM provider，并填写 `llm_provider_id`。LLM 不可用或输出不符合校验要求时，插件会自动使用规则处理。
+启用 LLM 功能时，需要先在 AstrBot 中配置可用的 LLM provider，并填写 `llm_provider_id`。LLM 不可用或输出不符合校验要求时，插件会自动使用规则处理。
 
-图片渲染需要 Pillow：
-
-```bash
-pip install Pillow
-```
-
-## 兼容性
+## 🧰 环境依赖
 
 - AstrBot：`>= 4.16, < 5`
 - Python：`>= 3.10`
 - 消息协议：OneBot v11 / v12
 
-## 开发与测试
+列表图片渲染需要 Pillow：
+
+```bash
+pip install Pillow
+```
+
+## ✅ 开发与验证
 
 ```bash
 python -m pip install -r requirements-dev.txt
@@ -101,7 +109,7 @@ python -m py_compile main.py content_guard.py pipelines.py segmentation.py image
 python -m pytest -q
 ```
 
-## 项目结构
+## 📦 项目结构
 
 ```text
 astrbot_plugin_filter/
@@ -119,7 +127,7 @@ astrbot_plugin_filter/
 └── README.md
 ```
 
-## 常见问题
+## ❓ 常见问题
 
 ### 安装后没有生效
 
@@ -133,16 +141,7 @@ astrbot_plugin_filter/
 
 内容防护在用户请求进入 LLM 前和机器人最终发送前各检查一次。词库配置支持每行一个词或短语，也支持逗号分隔；检测会忽略常见空格、标点、零宽字符和 Unicode 变形。命中高风险内容时，机器人不会复述原文，而是发送中性提示。词库应根据实际群规和运营场景维护，插件不会内置会变化的具体词表。
 
-## 许可证
-
-本项目采用 [GNU AGPL v3](./LICENSE) 许可证。
-
-## 作者
-
-- Shtraiy
-- 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
-
-## Private Companion 联动
+## 🤝 Private Companion 联动
 
 2.6.3 起，本插件与 [Private Companion](https://github.com/menglimi/astrbot_plugin_private_companion) 协同处理主动消息：
 
@@ -151,7 +150,16 @@ astrbot_plugin_filter/
 - 旧主动请求的过时回复会被丢弃，避免在用户消息后又发送。
 - Private Companion 未安装、API 不可用或取消失败时，本插件会自动降级，不影响原有过滤功能。
 
-## 更新日志
+## 📄 许可证
+
+本项目采用 [GNU AGPL v3](./LICENSE) 许可证。
+
+## 👤 作者
+
+- Shtraiy
+- 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
+
+## 📝 更新日志
 
 ### 2.6.3
 
