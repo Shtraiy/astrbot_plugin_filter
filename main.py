@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import inspect
 import math
 import time
 from collections.abc import Mapping
@@ -27,7 +26,6 @@ from .message_dispatcher import DispatchPolicy, MessageDispatcher
 from .segmentation import (
     apply_segmentation_and_style,
     prepare_multi_message_parts,
-    send_followups,
 )
 from .outbound_pipeline import OutboundTextPipeline
 from .private_companion_adapter import PrivateCompanionAdapter
