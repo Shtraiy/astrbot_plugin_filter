@@ -141,13 +141,11 @@ def test_private_companion_cancel_adapter_is_optional_and_best_effort():
         async def cancel_proactive_chat(self, session_id, *, token=""):
             calls.append((session_id, token))
 
-    module = SimpleNamespace(get_private_companion_api=lambda: Api())
-
-    def import_module(_name):
-        return module
+    async def cancel(_adapter, session_id, token):
+        await Api().cancel_proactive_chat(session_id, token=token)
 
     async def run():
-        with mock.patch.object(main.importlib, "import_module", side_effect=import_module):
+        with mock.patch.object(main.PrivateCompanionAdapter, "cancel", new=cancel):
             await optimizer._cancel_private_companion_proactive("group:1", "token-1")
 
     asyncio.run(run())

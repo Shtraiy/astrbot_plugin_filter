@@ -87,6 +87,35 @@ def test_reply_session_releases_lock_and_gate():
     assert not asyncio.run(scenario())
 
 
+def test_session_cancelled_reflects_user_priority_after_acquire():
+    coordinator = make_coordinator()
+    proactive = FakeEvent(request_id="pro-1")
+    user = FakeEvent(proactive=False, request_id="user-1")
+
+    async def scenario():
+        coordinator.claim_wakeup(proactive)
+        session = await coordinator.acquire_reply(proactive)
+        coordinator.mark_user_priority(user)
+        return coordinator.session_cancelled(session)
+
+    assert asyncio.run(scenario())
+
+
+def test_session_cancelled_when_tracked_gate_expires():
+    coordinator = make_coordinator()
+    event = FakeEvent(request_id="pro-1")
+
+    async def scenario():
+        coordinator.claim_wakeup(event)
+        session = await coordinator.acquire_reply(event)
+        coordinator.gates[event.unified_msg_origin].created_at = (
+            coordinator._now() - 301
+        )
+        return coordinator.session_cancelled(session)
+
+    assert asyncio.run(scenario())
+
+
 def test_new_private_companion_attempt_takes_over_stuck_proactive_session():
     scheduled = []
     coordinator = make_coordinator(scheduled.append)

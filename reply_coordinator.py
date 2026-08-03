@@ -24,6 +24,7 @@ class ReplySession:
     origin: str
     owner_event: Any | None
     reply_lock: asyncio.Lock
+    gate_tracked: bool = False
     superseded_by_user: bool = False
     cancel_requested: bool = False
     followup_task: asyncio.Task | None = None
@@ -139,12 +140,30 @@ class ReplyCoordinator:
             origin=origin,
             owner_event=event,
             reply_lock=reply_lock,
+            gate_tracked=state is not None,
             superseded_by_user=bool(state and state.superseded_by_user),
             cancel_requested=bool(state and state.cancel_requested),
         )
 
     def register_followup(self, session: ReplySession, task: asyncio.Task) -> None:
         session.followup_task = task
+
+    def session_cancelled(self, session: ReplySession) -> bool:
+        """Return whether a live reply session must stop sending follow-ups."""
+        if session.cancel_requested or session.superseded_by_user:
+            return True
+
+        self._cleanup_expired()
+        state = self.gates.get(session.origin)
+        if state is None:
+            # Some integrations invoke the decorating hook without the
+            # waiting hook that normally creates the gate first.
+            return session.gate_tracked
+        if state.owner_event is None:
+            return state.cancel_requested or state.superseded_by_user
+        if not self.events_correlate(state.owner_event, session.owner_event):
+            return True
+        return state.cancel_requested or state.superseded_by_user
 
     def register_pending_send(self, session: ReplySession) -> None:
         pending = (session.origin, session.reply_lock, session.owner_event)

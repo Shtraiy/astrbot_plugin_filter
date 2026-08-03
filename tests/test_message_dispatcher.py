@@ -91,3 +91,43 @@ def test_dispatcher_releases_session_when_send_fails(monkeypatch):
     locked, gates = asyncio.run(scenario())
     assert not locked
     assert not gates
+
+
+def test_dispatcher_stops_when_session_is_superseded(monkeypatch):
+    context = FakeContext()
+    coordinator = make_coordinator()
+    owner = FakeEvent()
+    user = FakeEvent()
+    user.private_companion_proactive_framework = False
+    coordinator.claim_wakeup(owner)
+
+    async def no_delay(_seconds):
+        return None
+
+    monkeypatch.setattr(
+        "_astrbot_plugin_filter_test.message_dispatcher.asyncio.sleep",
+        no_delay,
+    )
+
+    async def scenario():
+        session = await coordinator.acquire_reply(owner)
+        dispatcher = MessageDispatcher(context, coordinator)
+        calls = 0
+
+        async def process(text):
+            nonlocal calls
+            calls += 1
+            if text == "part-1":
+                coordinator.mark_user_priority(user)
+            return text
+
+        await dispatcher.send_followups(
+            owner.unified_msg_origin,
+            ["part-0", "part-1"],
+            policy=DispatchPolicy(0, 0),
+            session=session,
+            process_text=process,
+        )
+
+    asyncio.run(scenario())
+    assert [text for _, text in context.sent] == ["part-0"]

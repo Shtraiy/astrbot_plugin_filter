@@ -45,14 +45,24 @@ class MessageDispatcher:
 
         try:
             for index, paragraph in enumerate(bounded_paragraphs):
-                if session.cancel_requested or session.superseded_by_user:
+                if self.coordinator.session_cancelled(session):
                     break
                 await asyncio.sleep(random.uniform(delay_min, delay_max))
-                if session.cancel_requested or session.superseded_by_user:
+                if self.coordinator.session_cancelled(session):
                     break
                 text = paragraph
                 if process_text is not None:
-                    text = await process_text(paragraph)
+                    try:
+                        text = await process_text(paragraph)
+                    except Exception:
+                        logger.warning(
+                            "[鍒嗘鍙戦€乚 鍚庣画娈靛鐞嗗け璐? index=%d",
+                            index + 2,
+                            exc_info=True,
+                        )
+                        continue
+                if self.coordinator.session_cancelled(session):
+                    break
                 if text is None or not str(text).strip():
                     continue
                 logger.info(

@@ -81,3 +81,51 @@ def test_markdown_from_post_processing_is_removed(monkeypatch):
     asyncio.run(optimizer.on_decorating_result(FakeEvent(result)))
 
     assert result.chain[0].text == "赛程：BLAST Bounty Summer 2026"
+
+def test_followups_reuse_outbound_pipeline(monkeypatch):
+    optimizer = object.__new__(LanguageLogicOptimizer)
+    optimizer.config = {
+        "enable_content_guard": False,
+        "enable_de_ai_flavor": False,
+        "enable_image_render": False,
+        "multi_message": True,
+    }
+    context = FakeContext()
+    optimizer.context = context
+    optimizer._reply_locks = {}
+    optimizer._gates = {}
+    optimizer._pending_sends = {}
+    optimizer._pending_send = None
+    optimizer._onboarding_states = {}
+    optimizer._pending_tasks = set()
+    optimizer._get_delay_range = lambda: (0.0, 0.0)
+    pipeline_calls = []
+
+    class FakePipeline:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def process(self, text, _event, *, strict_guard=False):
+            pipeline_calls.append(text)
+            return SimpleNamespace(
+                text=f"clean:{text}",
+                changed=True,
+                guard_blocked=False,
+                stats={},
+            )
+
+    monkeypatch.setattr(filter_main, "OutboundTextPipeline", FakePipeline)
+    result = SimpleNamespace(chain=[Plain("first paragraph\n\nsecond paragraph")])
+
+    async def run():
+        await optimizer.on_decorating_result(FakeEvent(result))
+        if optimizer._pending_tasks:
+            await asyncio.gather(*tuple(optimizer._pending_tasks))
+
+    asyncio.run(run())
+
+    assert pipeline_calls == [
+        "first paragraph\n\nsecond paragraph",
+        "second paragraph",
+    ]
+    assert context.sent[0][1].chain[0].text == "clean:second paragraph"

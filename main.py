@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import math
 import time
 from collections.abc import Mapping
@@ -42,7 +41,6 @@ class _OnboardingState:
 MAX_ONBOARDING_STATES = 4096
 MAX_GATE_STATES = 4096
 GATE_TTL_DEFAULT = 300.0
-_EVENT_CORRELATION_FIELDS = ("request_id", "event_id", "message_id", "trace_id")
 FILTER_REPLY_LOCK_EXTRA = "astrbot_plugin_filter_reply_lock"
 
 
@@ -167,6 +165,7 @@ class LanguageLogicOptimizer(Star):
             modified = False
             direct_send_completed = False
             followups_scheduled = False
+            followup_paragraphs: list[str] = []
             guard_blocked = False
             pipeline_stats: dict[str, int] = {}
 
@@ -177,6 +176,21 @@ class LanguageLogicOptimizer(Star):
                 get_guard_terms=self._get_guard_terms,
                 segmentation_and_style=apply_segmentation_and_style,
             )
+            strict_guard = self._guard_mode() == "strict" or self._onboarding_active(event)
+
+            async def process_followup(text: str) -> str | None:
+                nonlocal guard_blocked
+                processed = await text_pipeline.process(
+                    text,
+                    event,
+                    strict_guard=strict_guard,
+                )
+                for name, count in processed.stats.items():
+                    pipeline_stats[name] = pipeline_stats.get(name, 0) + count
+                guard_blocked = guard_blocked or processed.guard_blocked
+                value = processed.text or ""
+                return value if value.strip() else None
+
             prepared_plain: list[tuple[Plain, str, str]] = []
             for comp in result.chain:
                 if not isinstance(comp, Plain):
@@ -186,7 +200,7 @@ class LanguageLogicOptimizer(Star):
                 processed = await text_pipeline.process(
                     original,
                     event,
-                    strict_guard=self._guard_mode() == "strict" or self._onboarding_active(event),
+                    strict_guard=strict_guard,
                 )
                 for name, count in processed.stats.items():
                     pipeline_stats[name] = pipeline_stats.get(name, 0) + count
@@ -218,20 +232,8 @@ class LanguageLogicOptimizer(Star):
                     paragraphs = prepare_multi_message_parts(text)
                     if len(paragraphs) > 1:
                         comp.text = paragraphs[0]
+                        followup_paragraphs.extend(paragraphs[1:])
                         modified = True
-                        delay_min, delay_max = self._get_delay_range()
-                        task = asyncio.create_task(
-                            self._send_followups_and_release(
-                                session,
-                                paragraphs[1:],
-                                delay_min,
-                                delay_max,
-                            )
-                        )
-                        self._track_task(task)
-                        self._get_reply_coordinator().register_followup(session, task)
-                        lock_owned = False
-                        followups_scheduled = True
                         continue
                     if len(paragraphs) == 1 and paragraphs[0] != original:
                         comp.text = paragraphs[0]
@@ -241,6 +243,22 @@ class LanguageLogicOptimizer(Star):
                 if text != original:
                     comp.text = text
                     modified = True
+
+            if followup_paragraphs:
+                delay_min, delay_max = self._get_delay_range()
+                task = asyncio.create_task(
+                    self._send_followups_and_release(
+                        session,
+                        followup_paragraphs,
+                        delay_min,
+                        delay_max,
+                        process_text=process_followup,
+                    )
+                )
+                self._track_task(task)
+                self._get_reply_coordinator().register_followup(session, task)
+                lock_owned = False
+                followups_scheduled = True
 
             if followups_scheduled:
                 pass
@@ -280,12 +298,14 @@ class LanguageLogicOptimizer(Star):
         paragraphs: list[str],
         delay_min: float,
         delay_max: float,
+        process_text=None,
     ) -> None:
         await self._get_message_dispatcher().send_followups(
             session.origin,
             paragraphs,
             policy=DispatchPolicy(delay_min, delay_max),
             session=session,
+            process_text=process_text,
         )
 
     # Run before plugins such as meme_manager that may stop hook propagation.
@@ -346,219 +366,6 @@ class LanguageLogicOptimizer(Star):
                 return True
         return bool(checker) if checker is not None else True
 
-    def _mark_proactive_gate_superseded(self, event: AstrMessageEvent) -> None:
-        """Let a real user message pass and invalidate the older proactive owner."""
-        key = self._gate_key(event)
-        state = getattr(self, "_gates", {}).get(key)
-        if state is None or state.owner_event is None:
-            return
-        if not self._is_proactive_event(state.owner_event):
-            return
-        if self._events_correlate(state.owner_event, event):
-            return
-        state.superseded_by_user = True
-        logger.info(
-            "[语言优化] 用户消息优先：标记同源主动请求失效 origin=%s",
-            key,
-        )
-        if not state.cancel_requested:
-            state.cancel_requested = True
-            self._schedule_private_companion_cancel(state.owner_event)
-
-    def _discard_superseded_proactive_result(self, event: AstrMessageEvent) -> bool:
-        """Prevent a stale proactive response from being sent after user input."""
-        if not self._is_proactive_event(event):
-            return False
-        state = getattr(self, "_gates", {}).get(self._gate_key(event))
-        if state is None or not state.superseded_by_user:
-            return False
-        if not self._events_correlate(state.owner_event, event):
-            return False
-        result = getattr(event, "get_result", lambda: None)()
-        chain = getattr(result, "chain", None) if result is not None else None
-        if chain is not None:
-            result.chain = []
-        stopper = getattr(event, "stop_event", None)
-        if callable(stopper):
-            stopper()
-        self._release_gate(event, apply_cooldown=False)
-        logger.info(
-            "[语言优化] 已丢弃被用户消息取代的主动回复 origin=%s",
-            self._gate_key(event),
-        )
-        return True
-
-    def _schedule_private_companion_cancel(self, owner_event: AstrMessageEvent) -> None:
-        token = str(
-            getattr(owner_event, "_private_companion_proactive_chat_token", "") or ""
-        ).strip()
-        if not token:
-            return
-        try:
-            task = asyncio.create_task(
-                self._cancel_private_companion_proactive(
-                    str(getattr(owner_event, "unified_msg_origin", "") or ""),
-                    token,
-                )
-            )
-        except RuntimeError:
-            return
-        self._track_task(task)
-
-    async def _cancel_private_companion_proactive(self, session_id: str, token: str) -> None:
-        """Best-effort optional cancellation; never make it a hard dependency."""
-        module_names = (
-            "data.plugins.astrbot_plugin_private_companion.main",
-            "astrbot_plugin_private_companion.main",
-        )
-        for module_name in module_names:
-            try:
-                module = importlib.import_module(module_name)
-                getter = getattr(module, "get_private_companion_api", None)
-                api = getter() if callable(getter) else None
-                cancel = getattr(api, "cancel_proactive_chat", None)
-                if not callable(cancel):
-                    continue
-                result = cancel(session_id, token=token)
-                if inspect.isawaitable(result):
-                    await result
-                logger.info(
-                    "[语言优化] 已请求 Private Companion 取消过时主动回复 origin=%s",
-                    session_id,
-                )
-                return
-            except Exception:
-                logger.debug(
-                    "[语言优化] Private Companion 主动回复取消失败，继续按本地失效标记处理",
-                    exc_info=True,
-                )
-
-    def _claim_or_stop_wake_up(self, event: AstrMessageEvent) -> bool:
-        if not event or not self._event_is_wake_up(event):
-            return True
-        if not self._is_proactive_event(event):
-            self._mark_proactive_gate_superseded(event)
-            return True
-        if not hasattr(self, "_gates"):
-            self._gates = {}
-        key = self._gate_key(event)
-        if self._gate_is_active(event):
-            state = self._gates.get(key)
-            if state is None or not self._events_correlate(state.owner_event, event):
-                logger.info(
-                    "[语言优化] 丢弃唤醒：同一来源仍有请求在途或处于冷却 origin=%s",
-                    key,
-                )
-                event.stop_event()
-                return False
-        if key not in self._gates:
-            if len(self._gates) >= MAX_GATE_STATES:
-                event.stop_event()
-                return False
-            self._gates[key] = _GateState(
-                owner_event=event,
-                created_at=time.monotonic(),
-            )
-        return True
-
-    def _gate_key(self, event: AstrMessageEvent) -> str:
-        origin = str(getattr(event, "unified_msg_origin", "") or "")
-        return origin or "__unified_default__"
-
-    def _gate_is_active(self, event: AstrMessageEvent | None = None) -> bool:
-        if not hasattr(self, "_gates"):
-            self._gates = {}
-        now = time.monotonic()
-        ttl = self._get_gate_ttl_seconds()
-        expired = [
-            key
-            for key, state in self._gates.items()
-            if state.owner_event is None and state.cooldown_until <= now
-            or (
-                ttl > 0
-                and state.owner_event is not None
-                and state.created_at > 0
-                and now - state.created_at > ttl
-            )
-        ]
-        for key in expired:
-            state = self._gates.pop(key, None)
-            if state is not None and state.owner_event is not None:
-                logger.warning(
-                    "[语言优化] 唤醒闸门超时自动释放 origin=%s 已持续=%.1f秒",
-                    key,
-                    now - state.created_at,
-                )
-        if event is None:
-            return bool(self._gates)
-        state = self._gates.get(self._gate_key(event))
-        return state is not None
-
-    def _release_gate(self, owner_event: AstrMessageEvent, apply_cooldown: bool = False) -> None:
-        if not hasattr(self, "_gates"):
-            self._gates = {}
-        key = self._gate_key(owner_event)
-        state = self._gates.get(key)
-        if state is None:
-            return
-        if state.owner_event is None or not self._events_correlate(
-            state.owner_event,
-            owner_event,
-        ):
-            return
-        if apply_cooldown:
-            cooldown = self._get_gate_seconds()
-            if cooldown > 0:
-                state.owner_event = None
-                state.cooldown_until = time.monotonic() + cooldown
-                return
-        self._gates.pop(key, None)
-
-    @staticmethod
-    def _event_correlation_ids(event: AstrMessageEvent | None) -> set[str]:
-        if event is None:
-            return set()
-        identifiers: set[str] = set()
-        for field in _EVENT_CORRELATION_FIELDS:
-            value = getattr(event, field, None)
-            if value is not None and str(value).strip():
-                identifiers.add(f"{field}:{value}")
-        return identifiers
-
-    @classmethod
-    def _events_correlate(
-        cls,
-        owner: AstrMessageEvent | None,
-        candidate: AstrMessageEvent | None,
-    ) -> bool:
-        if owner is candidate and owner is not None:
-            return True
-        return bool(
-            cls._event_correlation_ids(owner)
-            & cls._event_correlation_ids(candidate)
-        )
-
-    @classmethod
-    def _is_pending_send_event(cls, event: AstrMessageEvent, pending) -> bool:
-        return cls._events_correlate(pending[2], event)
-
-    def _finish_reply(
-        self,
-        reply_key: str,
-        reply_lock: asyncio.Lock,
-        owner_event: AstrMessageEvent | None = None,
-        apply_cooldown: bool = True,
-    ) -> None:
-        if reply_lock.locked():
-            reply_lock.release()
-        if self._reply_locks.get(reply_key) is reply_lock:
-            self._reply_locks.pop(reply_key, None)
-        if owner_event is not None:
-            self._release_gate(owner_event, apply_cooldown=apply_cooldown)
-
-    # Compatibility shims for older integrations that called these private
-    # helpers directly. The state transitions themselves live in the
-    # coordinator above.
     def _mark_proactive_gate_superseded(self, event: AstrMessageEvent) -> None:
         self._get_reply_coordinator().mark_user_priority(event)
 
