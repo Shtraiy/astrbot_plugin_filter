@@ -9,6 +9,17 @@
 **清理 AstrBot 输出中的内部痕迹，优化表达排版，并支持智能分段与列表图片渲染**
 </div>
 
+## Refactor architecture
+
+The outbound path is split into four responsibilities:
+
+- `outbound_pipeline.py` keeps the existing metadata, tool-trace, sensitive-content, Markdown, and style cleanup order.
+- `reply_coordinator.py` owns reply locks, wake-up gates, user-priority invalidation, cooldowns, and completion callbacks.
+- `message_dispatcher.py` is the single delayed follow-up sender and releases the owning reply session even when sending fails.
+- `private_companion_adapter.py` contains the optional Private Companion marker detection and cancellation API lookup.
+
+The cleanup stages are intentionally retained for compatibility. Private Companion remains optional: an unavailable adapter cannot block ordinary replies.
+
 > **astrbot_plugin_filter** 是一个用于 AstrBot 的输出后处理插件，能够在消息发送前清理模型输出中的元数据、工具叙述和敏感信息，并提供 LLM 文风优化、智能分段、消息串行发送与列表图片渲染等能力。
 
 ## 📌 主要能力
@@ -105,7 +116,7 @@ pip install Pillow
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m py_compile main.py content_guard.py pipelines.py segmentation.py image_renderer.py
+python -m py_compile main.py content_guard.py pipelines.py segmentation.py image_renderer.py outbound_pipeline.py reply_coordinator.py message_dispatcher.py private_companion_adapter.py
 python -m pytest -q
 ```
 
