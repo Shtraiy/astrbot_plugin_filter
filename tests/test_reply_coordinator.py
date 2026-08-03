@@ -5,12 +5,21 @@ from _astrbot_plugin_filter_test.reply_coordinator import ReplyCoordinator
 
 
 class FakeEvent:
-    def __init__(self, origin="group:1", *, proactive=True, request_id=None):
+    def __init__(
+        self,
+        origin="group:1",
+        *,
+        proactive=True,
+        request_id=None,
+        attempt_id=None,
+        result=None,
+    ):
         self.unified_msg_origin = origin
         self.private_companion_proactive_framework = proactive
         self.request_id = request_id
+        self._private_companion_proactive_chat_attempt_id = attempt_id
         self.stopped = False
-        self._result = None
+        self._result = result
 
     def is_wake_up(self):
         return True
@@ -76,3 +85,33 @@ def test_reply_session_releases_lock_and_gate():
         return session.reply_lock.locked()
 
     assert not asyncio.run(scenario())
+
+
+def test_new_private_companion_attempt_takes_over_stuck_proactive_session():
+    scheduled = []
+    coordinator = make_coordinator(scheduled.append)
+    old_result = SimpleNamespace(chain=["stale"])
+    owner = FakeEvent(attempt_id="attempt-1", result=old_result)
+    incoming = FakeEvent(attempt_id="attempt-2")
+
+    assert coordinator.claim_wakeup(owner)
+    assert coordinator.claim_wakeup(incoming)
+    assert not incoming.stopped
+    assert scheduled == [owner]
+    assert coordinator.gates["group:1"].owner_event is incoming
+
+
+def test_late_result_from_taken_over_attempt_is_discarded_without_releasing_new_gate():
+    coordinator = make_coordinator()
+    owner = FakeEvent(
+        attempt_id="attempt-1",
+        result=SimpleNamespace(chain=["stale"]),
+    )
+    incoming = FakeEvent(attempt_id="attempt-2")
+
+    coordinator.claim_wakeup(owner)
+    coordinator.claim_wakeup(incoming)
+
+    assert coordinator.discard_superseded_result(owner)
+    assert owner.get_result().chain == []
+    assert coordinator.gates["group:1"].owner_event is incoming

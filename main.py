@@ -74,6 +74,7 @@ class LanguageLogicOptimizer(Star):
             event_is_wake_up=self._event_is_wake_up,
             is_proactive_event=self._is_proactive_event,
             schedule_cancel=self._schedule_private_companion_cancel,
+            proactive_identity=self._get_private_companion_adapter().proactive_request_identity,
             gates=self._gates,
             reply_locks=self._reply_locks,
             max_gate_states=MAX_GATE_STATES,

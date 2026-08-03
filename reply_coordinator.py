@@ -40,6 +40,7 @@ class ReplyCoordinator:
         event_is_wake_up: Callable[[Any], bool],
         is_proactive_event: Callable[[Any | None], bool],
         schedule_cancel: Callable[[Any], None] | None = None,
+        proactive_identity: Callable[[Any | None], str] | None = None,
         gates: dict[str, GateState] | None = None,
         reply_locks: dict[str, asyncio.Lock] | None = None,
         max_gate_states: int = 4096,
@@ -50,12 +51,14 @@ class ReplyCoordinator:
         self._event_is_wake_up = event_is_wake_up
         self._is_proactive_event = is_proactive_event
         self._schedule_cancel = schedule_cancel or (lambda _event: None)
+        self._proactive_identity = proactive_identity or self._default_proactive_identity
         self._max_gate_states = max_gate_states
         self._now = now or time.monotonic
         self.gates = gates if gates is not None else {}
         self.reply_locks = reply_locks if reply_locks is not None else {}
         self.pending_sends: dict[str, tuple[str, asyncio.Lock, Any]] = {}
         self.pending_send: tuple[str, asyncio.Lock, Any] | None = None
+        self._superseded_event_ids: dict[int, Any] = {}
 
     def claim_wakeup(self, event: Any) -> bool:
         if not event or not self._event_is_wake_up(event):
@@ -70,6 +73,16 @@ class ReplyCoordinator:
         if self._gate_is_active(event):
             state = self.gates.get(key)
             if state is None or not self.events_correlate(state.owner_event, event):
+                if state is not None and self._is_new_proactive_attempt(
+                    state.owner_event,
+                    event,
+                ):
+                    self._supersede_owner(state.owner_event, replace_gate=True)
+                    self.gates[key] = GateState(
+                        owner_event=event,
+                        created_at=self._now(),
+                    )
+                    return True
                 logger.info("[语言优化] 丢弃唤醒：同一来源仍有请求在途或处于冷却 origin=%s", key)
                 self._stop_event(event)
                 return False
@@ -92,10 +105,7 @@ class ReplyCoordinator:
         if self.events_correlate(state.owner_event, event):
             return True
 
-        state.superseded_by_user = True
-        if not state.cancel_requested:
-            state.cancel_requested = True
-            self._schedule_cancel(state.owner_event)
+        self._supersede_owner(state.owner_event, state)
         logger.info("[语言优化] 用户消息优先：标记同源主动请求失效 origin=%s", key)
         return True
 
@@ -103,9 +113,10 @@ class ReplyCoordinator:
         if not self._is_proactive_event(event):
             return False
         state = self.gates.get(self._gate_key(event))
-        if state is None or not state.superseded_by_user:
+        superseded = id(event) in self._superseded_event_ids
+        if not superseded and (state is None or not state.superseded_by_user):
             return False
-        if not self.events_correlate(state.owner_event, event):
+        if not superseded and not self.events_correlate(state.owner_event, event):
             return False
 
         result = getattr(event, "get_result", lambda: None)()
@@ -113,7 +124,9 @@ class ReplyCoordinator:
         if chain is not None:
             result.chain = []
         self._stop_event(event)
-        self._release_gate(event, apply_cooldown=False)
+        if not superseded:
+            self._release_gate(event, apply_cooldown=False)
+        self._superseded_event_ids.pop(id(event), None)
         logger.info("[语言优化] 已丢弃被用户消息取代的主动回复 origin=%s", self._gate_key(event))
         return True
 
@@ -204,6 +217,46 @@ class ReplyCoordinator:
             state = self.gates.pop(key, None)
             if state is not None and state.owner_event is not None:
                 logger.warning("[语言优化] 唤醒闸门超时自动释放 origin=%s", key)
+        if len(self._superseded_event_ids) > self._max_gate_states:
+            stale_ids = list(self._superseded_event_ids)[: len(self._superseded_event_ids) - self._max_gate_states]
+            for stale_id in stale_ids:
+                self._superseded_event_ids.pop(stale_id, None)
+
+    def _supersede_owner(
+        self,
+        owner_event: Any,
+        state: GateState | None = None,
+        *,
+        replace_gate: bool = False,
+    ) -> None:
+        if owner_event is None:
+            return
+        if state is not None:
+            state.superseded_by_user = True
+        if replace_gate:
+            self._superseded_event_ids[id(owner_event)] = owner_event
+        if state is None or not state.cancel_requested:
+            if state is not None:
+                state.cancel_requested = True
+            self._schedule_cancel(owner_event)
+
+    def _is_new_proactive_attempt(self, owner: Any | None, candidate: Any) -> bool:
+        owner_identity = self._proactive_identity(owner)
+        candidate_identity = self._proactive_identity(candidate)
+        return bool(owner_identity and candidate_identity and owner_identity != candidate_identity)
+
+    @staticmethod
+    def _default_proactive_identity(event: Any | None) -> str:
+        if event is None:
+            return ""
+        for field in (
+            "_private_companion_proactive_chat_attempt_id",
+            "_private_companion_proactive_chat_token",
+        ):
+            value = str(getattr(event, field, "") or "").strip()
+            if value:
+                return f"{field}:{value}"
+        return ""
 
     def _gate_is_active(self, event: Any) -> bool:
         self._cleanup_expired()

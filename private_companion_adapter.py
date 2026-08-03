@@ -45,6 +45,20 @@ class PrivateCompanionAdapter:
         description = str(getattr(metadata, "description", "") or "").strip().lower()
         return description == "syntheticprivatewake"
 
+    @staticmethod
+    def proactive_request_identity(event: Any | None) -> str:
+        """Return the Companion attempt identity, if the event carries one."""
+        if event is None:
+            return ""
+        for field in (
+            "_private_companion_proactive_chat_attempt_id",
+            "_private_companion_proactive_chat_token",
+        ):
+            value = str(getattr(event, field, "") or "").strip()
+            if value:
+                return f"{field}:{value}"
+        return ""
+
     def schedule_cancel(self, owner_event: Any) -> None:
         token = str(
             getattr(owner_event, "_private_companion_proactive_chat_token", "") or ""
