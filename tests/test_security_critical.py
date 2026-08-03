@@ -88,6 +88,7 @@ if _PACKAGE_NAME not in sys.modules:
 
 main = importlib.import_module(f"{_PACKAGE_NAME}.main")
 segmentation = importlib.import_module(f"{_PACKAGE_NAME}.segmentation")
+outbound_pipeline = importlib.import_module(f"{_PACKAGE_NAME}.outbound_pipeline")
 
 
 class FakeContext:
@@ -152,7 +153,7 @@ class CriticalOutputSecurityTests(unittest.TestCase):
         optimizer = make_optimizer()
 
         with patch.object(main.logger, "error"), patch.object(
-            main,
+            outbound_pipeline,
             "clean_garbage",
             side_effect=RuntimeError("forced pipeline failure"),
         ):

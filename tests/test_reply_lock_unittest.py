@@ -70,12 +70,13 @@ class FilterReplyLockIntegrationTests(unittest.TestCase):
             followups_started = asyncio.Event()
             release_followups = asyncio.Event()
 
-            async def controlled_followups(*_args, **_kwargs):
+            async def controlled_followups(dispatcher, _origin, _paragraphs, **kwargs):
                 followups_started.set()
                 await release_followups.wait()
+                dispatcher.coordinator.release(kwargs["session"], apply_cooldown=True)
 
-            original_send_followups = filter_main.send_followups
-            filter_main.send_followups = controlled_followups
+            original_send_followups = filter_main.MessageDispatcher.send_followups
+            filter_main.MessageDispatcher.send_followups = controlled_followups
             try:
                 await optimizer.on_decorating_result(event)
                 await followups_started.wait()
@@ -93,7 +94,7 @@ class FilterReplyLockIntegrationTests(unittest.TestCase):
                 )
                 return same_lock, locked_during_followups, locked_after_followups
             finally:
-                filter_main.send_followups = original_send_followups
+                filter_main.MessageDispatcher.send_followups = original_send_followups
                 release_followups.set()
                 if optimizer._pending_tasks:
                     await asyncio.gather(

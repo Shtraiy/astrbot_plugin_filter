@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import inspect
 import math
 import time
 from collections.abc import Mapping
@@ -19,41 +18,25 @@ from astrbot.api.star import Context, Star
 from .content_guard import (
     SAFE_REPLY,
     evaluate_input,
-    evaluate_output,
     is_group_origin,
     parse_terms,
 )
 from .image_renderer import cleanup_temp_file, should_render_image, text_to_image
-from .pipelines import (
-    clean_garbage,
-    de_ai_flavor,
-    deidentify_tool_names,
-    filter_sensitive,
-    replace_tool_leakage,
-    remove_tool_narration,
-    replace_user,
-    strip_markdown,
-)
+from .message_dispatcher import DispatchPolicy, MessageDispatcher
 from .segmentation import (
     apply_segmentation_and_style,
     prepare_multi_message_parts,
-    send_followups,
 )
+from .outbound_pipeline import OutboundTextPipeline
+from .private_companion_adapter import PrivateCompanionAdapter
+from .reply_coordinator import GateState as _GateState
+from .reply_coordinator import ReplyCoordinator, ReplySession
 
 
 @dataclass
 class _OnboardingState:
     started_at: float
     message_count: int = 0
-
-
-@dataclass
-class _GateState:
-    owner_event: AstrMessageEvent | None
-    created_at: float = 0.0
-    cooldown_until: float = 0.0
-    superseded_by_user: bool = False
-    cancel_requested: bool = False
 
 
 MAX_ONBOARDING_STATES = 4096
@@ -75,16 +58,63 @@ class LanguageLogicOptimizer(Star):
         self._pending_send: tuple[str, asyncio.Lock, AstrMessageEvent] | None = None
         self._pending_sends: dict[str, tuple[str, asyncio.Lock, AstrMessageEvent]] = {}
         self._onboarding_states: dict[str, _OnboardingState] = {}
+        self._private_companion_adapter = PrivateCompanionAdapter(
+            track_task=self._track_task,
+        )
+        self._reply_coordinator = self._build_reply_coordinator()
+        self._message_dispatcher = MessageDispatcher(
+            self.context,
+            self._reply_coordinator,
+        )
+
+    def _build_reply_coordinator(self) -> ReplyCoordinator:
+        return ReplyCoordinator(
+            get_gate_seconds=self._get_gate_seconds,
+            get_gate_ttl_seconds=self._get_gate_ttl_seconds,
+            event_is_wake_up=self._event_is_wake_up,
+            is_proactive_event=self._is_proactive_event,
+            schedule_cancel=self._schedule_private_companion_cancel,
+            proactive_identity=self._get_private_companion_adapter().proactive_request_identity,
+            gates=self._gates,
+            reply_locks=self._reply_locks,
+            max_gate_states=MAX_GATE_STATES,
+            now=lambda: time.monotonic(),
+        )
+
+    def _get_reply_coordinator(self) -> ReplyCoordinator:
+        coordinator = getattr(self, "_reply_coordinator", None)
+        if coordinator is None:
+            if not hasattr(self, "_gates"):
+                self._gates = {}
+            if not hasattr(self, "_reply_locks"):
+                self._reply_locks = {}
+            coordinator = self._build_reply_coordinator()
+            self._reply_coordinator = coordinator
+        return coordinator
+
+    def _get_message_dispatcher(self) -> MessageDispatcher:
+        dispatcher = getattr(self, "_message_dispatcher", None)
+        if dispatcher is None:
+            dispatcher = MessageDispatcher(self.context, self._get_reply_coordinator())
+            self._message_dispatcher = dispatcher
+        return dispatcher
+
+    def _get_private_companion_adapter(self) -> PrivateCompanionAdapter:
+        adapter = getattr(self, "_private_companion_adapter", None)
+        if adapter is None:
+            adapter = PrivateCompanionAdapter(track_task=self._track_task)
+            self._private_companion_adapter = adapter
+        return adapter
 
     @_event_filter.on_waiting_llm_request()
     async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
         """Discard a wake-up before it waits for AstrBot's session lock."""
-        self._claim_or_stop_wake_up(event)
+        self._get_reply_coordinator().claim_wakeup(event)
 
     @_event_filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
         """Fallback gate check immediately before the LLM request."""
-        if not self._claim_or_stop_wake_up(event):
+        if not self._get_reply_coordinator().claim_wakeup(event):
             return
         if not self._get_config("enable_content_guard", True):
             return
@@ -107,7 +137,7 @@ class LanguageLogicOptimizer(Star):
         if not event:
             return
 
-        if self._discard_superseded_proactive_result(event):
+        if self._get_reply_coordinator().discard_superseded_result(event):
             return
 
         result = None
@@ -120,9 +150,9 @@ class LanguageLogicOptimizer(Star):
                 self._release_gate(event)
                 return
 
-            reply_key = event.unified_msg_origin
-            reply_lock = self._reply_locks.setdefault(reply_key, asyncio.Lock())
-            await reply_lock.acquire()
+            session = await self._get_reply_coordinator().acquire_reply(event)
+            reply_key = session.origin
+            reply_lock = session.reply_lock
             lock_owned = True
             set_extra = getattr(event, "set_extra", None)
             if callable(set_extra):
@@ -141,47 +171,27 @@ class LanguageLogicOptimizer(Star):
             pipeline_stats: dict[str, int] = {}
 
             _coalesce_adjacent_plain_components(result.chain)
+            text_pipeline = OutboundTextPipeline(
+                context=self.context,
+                get_config=self._get_config,
+                get_guard_terms=self._get_guard_terms,
+                segmentation_and_style=apply_segmentation_and_style,
+            )
             prepared_plain: list[tuple[Plain, str, str]] = []
             for comp in result.chain:
                 if not isinstance(comp, Plain):
                     continue
 
                 original = comp.text or ""
-                text = original
-
-                text, _ = _apply_pipeline("清理元数据", clean_garbage, text, pipeline_stats)
-                text, _ = _apply_pipeline("替换用户称呼", replace_user, text, pipeline_stats)
-                text, _ = _apply_pipeline("过滤敏感信息", filter_sensitive, text, pipeline_stats)
-                text, _ = _apply_pipeline("拦截工具流程泄露", replace_tool_leakage, text, pipeline_stats)
-                text, _ = _apply_pipeline("清理工具叙述", remove_tool_narration, text, pipeline_stats)
-                text, _ = _apply_pipeline("工具名称脱敏", deidentify_tool_names, text, pipeline_stats)
-
-                if self._get_config("enable_de_ai_flavor", True):
-                    text, _ = _apply_pipeline("去除 AI 味", de_ai_flavor, text, pipeline_stats)
-
-                text, _ = await _apply_pipeline_async(
-                    "分段与文风优化",
-                    apply_segmentation_and_style,
-                    text,
-                    self.context,
-                    self._get_config,
-                    stats=pipeline_stats,
+                processed = await text_pipeline.process(
+                    original,
+                    event,
+                    strict_guard=self._guard_mode() == "strict" or self._onboarding_active(event),
                 )
-                text, _ = _apply_pipeline("清理 Markdown", strip_markdown, text, pipeline_stats)
-                text, _ = _apply_pipeline("再次过滤敏感信息", filter_sensitive, text, pipeline_stats)
-
-                if self._get_config("enable_content_guard", True):
-                    decision = evaluate_output(
-                        text,
-                        self._get_guard_terms(),
-                        strict=self._guard_mode() == "strict" or self._onboarding_active(event),
-                    )
-                    if decision.blocked:
-                        text = SAFE_REPLY
-                        guard_blocked = True
-                        pipeline_stats["content_guard"] = pipeline_stats.get("content_guard", 0) + 1
-
-                prepared_plain.append((comp, original, text))
+                for name, count in processed.stats.items():
+                    pipeline_stats[name] = pipeline_stats.get(name, 0) + count
+                guard_blocked = guard_blocked or processed.guard_blocked
+                prepared_plain.append((comp, original, processed.text))
 
             fallback_written = False
             for comp, original, text in prepared_plain:
@@ -212,15 +222,14 @@ class LanguageLogicOptimizer(Star):
                         delay_min, delay_max = self._get_delay_range()
                         task = asyncio.create_task(
                             self._send_followups_and_release(
-                                reply_key,
-                                reply_lock,
+                                session,
                                 paragraphs[1:],
                                 delay_min,
                                 delay_max,
-                                event,
                             )
                         )
                         self._track_task(task)
+                        self._get_reply_coordinator().register_followup(session, task)
                         lock_owned = False
                         followups_scheduled = True
                         continue
@@ -239,9 +248,9 @@ class LanguageLogicOptimizer(Star):
                 self._finish_reply(reply_key, reply_lock, event)
                 lock_owned = False
             elif _has_pending_message(result.chain):
-                pending = (reply_key, reply_lock, event)
-                self._pending_sends[reply_key] = pending
-                self._pending_send = pending
+                self._get_reply_coordinator().register_pending_send(session)
+                self._pending_sends = self._get_reply_coordinator().pending_sends
+                self._pending_send = self._get_reply_coordinator().pending_send
                 lock_owned = False
             else:
                 self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
@@ -267,39 +276,28 @@ class LanguageLogicOptimizer(Star):
 
     async def _send_followups_and_release(
         self,
-        reply_key: str,
-        reply_lock: asyncio.Lock,
+        session: ReplySession,
         paragraphs: list[str],
         delay_min: float,
         delay_max: float,
-        owner_event: AstrMessageEvent | None = None,
     ) -> None:
-        try:
-            await send_followups(self.context, reply_key, paragraphs, delay_min, delay_max)
-        finally:
-            self._finish_reply(reply_key, reply_lock, owner_event)
+        await self._get_message_dispatcher().send_followups(
+            session.origin,
+            paragraphs,
+            policy=DispatchPolicy(delay_min, delay_max),
+            session=session,
+        )
 
     # Run before plugins such as meme_manager that may stop hook propagation.
     # This callback owns the response gate cleanup, so it must not be skipped.
     @_event_filter.after_message_sent(priority=1000)
     async def after_message_sent(self, event: AstrMessageEvent) -> None:
-        origin = getattr(event, "unified_msg_origin", None)
-        pending_sends = getattr(self, "_pending_sends", {})
-        pending = pending_sends.get(origin)
-        if pending is None and isinstance(getattr(self, "_pending_send", None), tuple):
-            pending = self._pending_send
-        if pending is not None and self._is_pending_send_event(event, pending):
-            pending_sends.pop(pending[0], None)
-            if self._pending_send is pending:
-                self._pending_send = None
-            self._finish_reply(pending[0], pending[1], pending[2])
-            return
-
-        # Another plugin may stop on_decorating_result before this plugin can
-        # register a pending reply. Release the wake-up gate after that reply
-        # is sent, but keep a lock-owned follow-up sequence untouched.
-        if origin not in getattr(self, "_reply_locks", {}):
-            self._release_gate(event)
+        coordinator = self._get_reply_coordinator()
+        coordinator.pending_sends = getattr(self, "_pending_sends", coordinator.pending_sends)
+        coordinator.pending_send = getattr(self, "_pending_send", coordinator.pending_send)
+        coordinator.release_after_send(event)
+        self._pending_sends = coordinator.pending_sends
+        self._pending_send = coordinator.pending_send
 
     def _get_config(self, key: str, default=None):
         context = getattr(self, "context", None)
@@ -347,31 +345,6 @@ class LanguageLogicOptimizer(Star):
             except Exception:
                 return True
         return bool(checker) if checker is not None else True
-
-    @staticmethod
-    def _is_proactive_event(event: AstrMessageEvent | None) -> bool:
-        """Recognize explicit synthetic/proactive events without guessing from text."""
-        if event is None:
-            return False
-        markers = (
-            "private_companion_proactive_framework",
-            "_private_companion_external_proactive_source",
-            "_private_companion_proactive_chat_token",
-            "_private_companion_proactive_delivery_umo",
-        )
-        for marker in markers:
-            value = getattr(event, marker, None)
-            if isinstance(value, str):
-                if value.strip():
-                    return True
-            elif value:
-                return True
-
-        if type(event).__name__ == "SyntheticPrivateWakeEvent":
-            return True
-        metadata = getattr(event, "platform_meta", None)
-        description = str(getattr(metadata, "description", "") or "").strip().lower()
-        return description == "syntheticprivatewake"
 
     def _mark_proactive_gate_superseded(self, event: AstrMessageEvent) -> None:
         """Let a real user message pass and invalidate the older proactive owner."""
@@ -583,6 +556,51 @@ class LanguageLogicOptimizer(Star):
         if owner_event is not None:
             self._release_gate(owner_event, apply_cooldown=apply_cooldown)
 
+    # Compatibility shims for older integrations that called these private
+    # helpers directly. The state transitions themselves live in the
+    # coordinator above.
+    def _mark_proactive_gate_superseded(self, event: AstrMessageEvent) -> None:
+        self._get_reply_coordinator().mark_user_priority(event)
+
+    def _discard_superseded_proactive_result(self, event: AstrMessageEvent) -> bool:
+        return self._get_reply_coordinator().discard_superseded_result(event)
+
+    def _claim_or_stop_wake_up(self, event: AstrMessageEvent) -> bool:
+        return self._get_reply_coordinator().claim_wakeup(event)
+
+    def _gate_is_active(self, event: AstrMessageEvent | None = None) -> bool:
+        return self._get_reply_coordinator().gate_is_active(event)
+
+    def _release_gate(self, owner_event: AstrMessageEvent, apply_cooldown: bool = False) -> None:
+        self._get_reply_coordinator().release_gate(owner_event, apply_cooldown)
+
+    @classmethod
+    def _events_correlate(
+        cls,
+        owner: AstrMessageEvent | None,
+        candidate: AstrMessageEvent | None,
+    ) -> bool:
+        return ReplyCoordinator.events_correlate(owner, candidate)
+
+    def _finish_reply(
+        self,
+        reply_key: str,
+        reply_lock: asyncio.Lock,
+        owner_event: AstrMessageEvent | None = None,
+        apply_cooldown: bool = True,
+    ) -> None:
+        session = ReplySession(reply_key, owner_event, reply_lock)
+        self._get_reply_coordinator().release(session, apply_cooldown=apply_cooldown)
+
+    def _is_proactive_event(self, event: AstrMessageEvent | None) -> bool:
+        return self._get_private_companion_adapter().is_proactive_event(event)
+
+    def _schedule_private_companion_cancel(self, owner_event: AstrMessageEvent) -> None:
+        self._get_private_companion_adapter().schedule_cancel(owner_event)
+
+    async def _cancel_private_companion_proactive(self, session_id: str, token: str) -> None:
+        await self._get_private_companion_adapter().cancel(session_id, token)
+
     def _get_guard_terms(self) -> list[str]:
         return parse_terms(self._get_config("content_guard_block_terms", ""))
 
@@ -758,19 +776,3 @@ def _coalesce_adjacent_plain_components(chain) -> None:
 def _replace_chain_with_safe_reply(chain) -> None:
     chain.clear()
     chain.append(Plain(SAFE_REPLY))
-
-
-def _apply_pipeline(name: str, func, text: str, stats: dict[str, int]) -> tuple[str, bool]:
-    result = func(text)
-    if result != text:
-        stats[name] = stats.get(name, 0) + 1
-        return result, True
-    return text, False
-
-
-async def _apply_pipeline_async(name: str, func, text: str, *args, stats: dict[str, int]) -> tuple[str, bool]:
-    result = await func(text, *args)
-    if result != text:
-        stats[name] = stats.get(name, 0) + 1
-        return result, True
-    return text, False
