@@ -223,3 +223,6 @@ config.json
 *.png.tmp
 *.jpg.tmp
 *.jpeg.tmp
+
+# Local git worktrees
+.worktrees/
