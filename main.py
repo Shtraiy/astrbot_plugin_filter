@@ -30,6 +30,7 @@ from .segmentation import (
     send_followups,
 )
 from .outbound_pipeline import OutboundTextPipeline
+from .private_companion_adapter import PrivateCompanionAdapter
 from .reply_coordinator import GateState as _GateState
 from .reply_coordinator import ReplyCoordinator, ReplySession
 
@@ -59,6 +60,9 @@ class LanguageLogicOptimizer(Star):
         self._pending_send: tuple[str, asyncio.Lock, AstrMessageEvent] | None = None
         self._pending_sends: dict[str, tuple[str, asyncio.Lock, AstrMessageEvent]] = {}
         self._onboarding_states: dict[str, _OnboardingState] = {}
+        self._private_companion_adapter = PrivateCompanionAdapter(
+            track_task=self._track_task,
+        )
         self._reply_coordinator = self._build_reply_coordinator()
         self._message_dispatcher = MessageDispatcher(
             self.context,
@@ -95,6 +99,13 @@ class LanguageLogicOptimizer(Star):
             dispatcher = MessageDispatcher(self.context, self._get_reply_coordinator())
             self._message_dispatcher = dispatcher
         return dispatcher
+
+    def _get_private_companion_adapter(self) -> PrivateCompanionAdapter:
+        adapter = getattr(self, "_private_companion_adapter", None)
+        if adapter is None:
+            adapter = PrivateCompanionAdapter(track_task=self._track_task)
+            self._private_companion_adapter = adapter
+        return adapter
 
     @_event_filter.on_waiting_llm_request()
     async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
@@ -335,31 +346,6 @@ class LanguageLogicOptimizer(Star):
             except Exception:
                 return True
         return bool(checker) if checker is not None else True
-
-    @staticmethod
-    def _is_proactive_event(event: AstrMessageEvent | None) -> bool:
-        """Recognize explicit synthetic/proactive events without guessing from text."""
-        if event is None:
-            return False
-        markers = (
-            "private_companion_proactive_framework",
-            "_private_companion_external_proactive_source",
-            "_private_companion_proactive_chat_token",
-            "_private_companion_proactive_delivery_umo",
-        )
-        for marker in markers:
-            value = getattr(event, marker, None)
-            if isinstance(value, str):
-                if value.strip():
-                    return True
-            elif value:
-                return True
-
-        if type(event).__name__ == "SyntheticPrivateWakeEvent":
-            return True
-        metadata = getattr(event, "platform_meta", None)
-        description = str(getattr(metadata, "description", "") or "").strip().lower()
-        return description == "syntheticprivatewake"
 
     def _mark_proactive_gate_superseded(self, event: AstrMessageEvent) -> None:
         """Let a real user message pass and invalidate the older proactive owner."""
@@ -606,6 +592,15 @@ class LanguageLogicOptimizer(Star):
     ) -> None:
         session = ReplySession(reply_key, owner_event, reply_lock)
         self._get_reply_coordinator().release(session, apply_cooldown=apply_cooldown)
+
+    def _is_proactive_event(self, event: AstrMessageEvent | None) -> bool:
+        return self._get_private_companion_adapter().is_proactive_event(event)
+
+    def _schedule_private_companion_cancel(self, owner_event: AstrMessageEvent) -> None:
+        self._get_private_companion_adapter().schedule_cancel(owner_event)
+
+    async def _cancel_private_companion_proactive(self, session_id: str, token: str) -> None:
+        await self._get_private_companion_adapter().cancel(session_id, token)
 
     def _get_guard_terms(self) -> list[str]:
         return parse_terms(self._get_config("content_guard_block_terms", ""))
