@@ -19,26 +19,16 @@ from astrbot.api.star import Context, Star
 from .content_guard import (
     SAFE_REPLY,
     evaluate_input,
-    evaluate_output,
     is_group_origin,
     parse_terms,
 )
 from .image_renderer import cleanup_temp_file, should_render_image, text_to_image
-from .pipelines import (
-    clean_garbage,
-    de_ai_flavor,
-    deidentify_tool_names,
-    filter_sensitive,
-    replace_tool_leakage,
-    remove_tool_narration,
-    replace_user,
-    strip_markdown,
-)
 from .segmentation import (
     apply_segmentation_and_style,
     prepare_multi_message_parts,
     send_followups,
 )
+from .outbound_pipeline import OutboundTextPipeline
 
 
 @dataclass
@@ -141,47 +131,27 @@ class LanguageLogicOptimizer(Star):
             pipeline_stats: dict[str, int] = {}
 
             _coalesce_adjacent_plain_components(result.chain)
+            text_pipeline = OutboundTextPipeline(
+                context=self.context,
+                get_config=self._get_config,
+                get_guard_terms=self._get_guard_terms,
+                segmentation_and_style=apply_segmentation_and_style,
+            )
             prepared_plain: list[tuple[Plain, str, str]] = []
             for comp in result.chain:
                 if not isinstance(comp, Plain):
                     continue
 
                 original = comp.text or ""
-                text = original
-
-                text, _ = _apply_pipeline("清理元数据", clean_garbage, text, pipeline_stats)
-                text, _ = _apply_pipeline("替换用户称呼", replace_user, text, pipeline_stats)
-                text, _ = _apply_pipeline("过滤敏感信息", filter_sensitive, text, pipeline_stats)
-                text, _ = _apply_pipeline("拦截工具流程泄露", replace_tool_leakage, text, pipeline_stats)
-                text, _ = _apply_pipeline("清理工具叙述", remove_tool_narration, text, pipeline_stats)
-                text, _ = _apply_pipeline("工具名称脱敏", deidentify_tool_names, text, pipeline_stats)
-
-                if self._get_config("enable_de_ai_flavor", True):
-                    text, _ = _apply_pipeline("去除 AI 味", de_ai_flavor, text, pipeline_stats)
-
-                text, _ = await _apply_pipeline_async(
-                    "分段与文风优化",
-                    apply_segmentation_and_style,
-                    text,
-                    self.context,
-                    self._get_config,
-                    stats=pipeline_stats,
+                processed = await text_pipeline.process(
+                    original,
+                    event,
+                    strict_guard=self._guard_mode() == "strict" or self._onboarding_active(event),
                 )
-                text, _ = _apply_pipeline("清理 Markdown", strip_markdown, text, pipeline_stats)
-                text, _ = _apply_pipeline("再次过滤敏感信息", filter_sensitive, text, pipeline_stats)
-
-                if self._get_config("enable_content_guard", True):
-                    decision = evaluate_output(
-                        text,
-                        self._get_guard_terms(),
-                        strict=self._guard_mode() == "strict" or self._onboarding_active(event),
-                    )
-                    if decision.blocked:
-                        text = SAFE_REPLY
-                        guard_blocked = True
-                        pipeline_stats["content_guard"] = pipeline_stats.get("content_guard", 0) + 1
-
-                prepared_plain.append((comp, original, text))
+                for name, count in processed.stats.items():
+                    pipeline_stats[name] = pipeline_stats.get(name, 0) + count
+                guard_blocked = guard_blocked or processed.guard_blocked
+                prepared_plain.append((comp, original, processed.text))
 
             fallback_written = False
             for comp, original, text in prepared_plain:
@@ -758,19 +728,3 @@ def _coalesce_adjacent_plain_components(chain) -> None:
 def _replace_chain_with_safe_reply(chain) -> None:
     chain.clear()
     chain.append(Plain(SAFE_REPLY))
-
-
-def _apply_pipeline(name: str, func, text: str, stats: dict[str, int]) -> tuple[str, bool]:
-    result = func(text)
-    if result != text:
-        stats[name] = stats.get(name, 0) + 1
-        return result, True
-    return text, False
-
-
-async def _apply_pipeline_async(name: str, func, text: str, *args, stats: dict[str, int]) -> tuple[str, bool]:
-    result = await func(text, *args)
-    if result != text:
-        stats[name] = stats.get(name, 0) + 1
-        return result, True
-    return text, False
