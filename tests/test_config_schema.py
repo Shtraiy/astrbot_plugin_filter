@@ -14,6 +14,8 @@ class ConfigSchemaTests(unittest.TestCase):
 
         self.assertNotIn("properties", schema)
         self.assertNotIn("type", schema)
+        self.assertEqual(schema["wakeup_interval_min"]["default"], 1.0)
+        self.assertEqual(schema["wakeup_interval_max"]["default"], 2.0)
         for key, value in schema.items():
             self.assertIsInstance(value, dict, key)
             self.assertIn(value.get("type"), supported_types, key)

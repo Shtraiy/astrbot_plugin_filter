@@ -30,6 +30,7 @@ def make_coordinator():
     return ReplyCoordinator(
         get_gate_seconds=lambda: 0,
         get_gate_ttl_seconds=lambda: 300,
+        get_wakeup_interval=lambda: (0, 0),
         event_is_wake_up=lambda event: True,
         is_proactive_event=lambda event: True,
     )
@@ -93,7 +94,7 @@ def test_dispatcher_releases_session_when_send_fails(monkeypatch):
     assert not gates
 
 
-def test_dispatcher_stops_when_session_is_superseded(monkeypatch):
+def test_dispatcher_does_not_preempt_active_session_for_user_priority(monkeypatch):
     context = FakeContext()
     coordinator = make_coordinator()
     owner = FakeEvent()
@@ -130,4 +131,4 @@ def test_dispatcher_stops_when_session_is_superseded(monkeypatch):
         )
 
     asyncio.run(scenario())
-    assert [text for _, text in context.sent] == ["part-0"]
+    assert [text for _, text in context.sent] == ["part-0", "part-1"]

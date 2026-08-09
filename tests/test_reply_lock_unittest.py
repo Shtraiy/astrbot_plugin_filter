@@ -55,10 +55,55 @@ def make_optimizer():
     optimizer._onboarding_states = {}
     optimizer._pending_tasks = set()
     optimizer._get_delay_range = lambda: (0.0, 0.0)
+    optimizer._get_wakeup_interval = lambda: (0.0, 0.0)
     return optimizer
 
 
 class FilterReplyLockIntegrationTests(unittest.TestCase):
+    def test_global_queue_waits_until_all_followups_finish(self):
+        async def scenario():
+            optimizer = make_optimizer()
+            owner = FakeEvent(
+                SimpleNamespace(
+                    chain=[Plain("first paragraph\n\nsecond paragraph")]
+                )
+            )
+            queued = FakeEvent(SimpleNamespace(chain=[Plain("queued")]))
+            followups_started = asyncio.Event()
+            release_followups = asyncio.Event()
+
+            async def controlled_followups(dispatcher, _origin, _paragraphs, **kwargs):
+                followups_started.set()
+                await release_followups.wait()
+                dispatcher.coordinator.release(kwargs["session"], apply_cooldown=True)
+
+            original_send_followups = filter_main.MessageDispatcher.send_followups
+            filter_main.MessageDispatcher.send_followups = controlled_followups
+            try:
+                await optimizer.on_waiting_llm_request(owner)
+                queued_task = asyncio.create_task(
+                    optimizer.on_waiting_llm_request(queued)
+                )
+                await asyncio.sleep(0)
+                await optimizer.on_decorating_result(owner)
+                await followups_started.wait()
+                assert not queued_task.done()
+
+                release_followups.set()
+                await asyncio.gather(*tuple(optimizer._pending_tasks))
+                await queued_task
+                return optimizer._get_reply_coordinator().active_event is queued
+            finally:
+                filter_main.MessageDispatcher.send_followups = original_send_followups
+                release_followups.set()
+                if optimizer._pending_tasks:
+                    await asyncio.gather(
+                        *tuple(optimizer._pending_tasks),
+                        return_exceptions=True,
+                    )
+
+        self.assertTrue(asyncio.run(scenario()))
+
     def test_reply_lock_stays_held_until_all_followups_finish(self):
         async def scenario():
             optimizer = make_optimizer()

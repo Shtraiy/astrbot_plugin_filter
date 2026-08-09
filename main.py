@@ -41,6 +41,8 @@ class _OnboardingState:
 MAX_ONBOARDING_STATES = 4096
 MAX_GATE_STATES = 4096
 GATE_TTL_DEFAULT = 300.0
+WAKEUP_INTERVAL_MIN_DEFAULT = 1.0
+WAKEUP_INTERVAL_MAX_DEFAULT = 2.0
 FILTER_REPLY_LOCK_EXTRA = "astrbot_plugin_filter_reply_lock"
 
 
@@ -73,6 +75,7 @@ class LanguageLogicOptimizer(Star):
             is_proactive_event=self._is_proactive_event,
             schedule_cancel=self._schedule_private_companion_cancel,
             proactive_identity=self._get_private_companion_adapter().proactive_request_identity,
+            get_wakeup_interval=self._get_wakeup_interval,
             gates=self._gates,
             reply_locks=self._reply_locks,
             max_gate_states=MAX_GATE_STATES,
@@ -106,13 +109,13 @@ class LanguageLogicOptimizer(Star):
 
     @_event_filter.on_waiting_llm_request()
     async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
-        """Discard a wake-up before it waits for AstrBot's session lock."""
-        self._get_reply_coordinator().claim_wakeup(event)
+        """Admit wake-ups globally before they wait for AstrBot's session lock."""
+        await self._get_reply_coordinator().admit_wakeup(event)
 
     @_event_filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
-        """Fallback gate check immediately before the LLM request."""
-        if not self._get_reply_coordinator().claim_wakeup(event):
+        """Idempotent admission check immediately before the LLM request."""
+        if not await self._get_reply_coordinator().admit_wakeup(event):
             return
         if not self._get_config("enable_content_guard", True):
             return
@@ -127,8 +130,10 @@ class LanguageLogicOptimizer(Star):
             return
 
         event.stop_event()
-        self._release_gate(event)
-        await self._send_guard_reply(event, decision.category)
+        try:
+            await self._send_guard_reply(event, decision.category)
+        finally:
+            self._release_gate(event)
 
     @_event_filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
@@ -142,6 +147,7 @@ class LanguageLogicOptimizer(Star):
         reply_key = None
         reply_lock = None
         lock_owned = False
+        completion_delegated = False
         try:
             result = event.get_result()
             if not result or not getattr(result, "chain", None):
@@ -261,7 +267,7 @@ class LanguageLogicOptimizer(Star):
                 followups_scheduled = True
 
             if followups_scheduled:
-                pass
+                completion_delegated = True
             elif direct_send_completed and not _has_pending_message(result.chain):
                 self._finish_reply(reply_key, reply_lock, event)
                 lock_owned = False
@@ -269,6 +275,7 @@ class LanguageLogicOptimizer(Star):
                 self._get_reply_coordinator().register_pending_send(session)
                 self._pending_sends = self._get_reply_coordinator().pending_sends
                 self._pending_send = self._get_reply_coordinator().pending_send
+                completion_delegated = True
                 lock_owned = False
             else:
                 self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
@@ -291,6 +298,8 @@ class LanguageLogicOptimizer(Star):
         finally:
             if lock_owned and reply_key is not None and reply_lock is not None:
                 self._finish_reply(reply_key, reply_lock, event, apply_cooldown=False)
+            elif not completion_delegated:
+                self._release_gate(event)
 
     async def _send_followups_and_release(
         self,
@@ -487,6 +496,24 @@ class LanguageLogicOptimizer(Star):
         delay_min = min(5.0, max(2.0, self._get_float_config("delay_min", 2.0)))
         delay_max = min(5.0, max(2.0, self._get_float_config("delay_max", 5.0)))
         return (delay_min, delay_max) if delay_min <= delay_max else (delay_max, delay_min)
+
+    def _get_wakeup_interval(self) -> tuple[float, float]:
+        """Return a safe global interval between completed wake-ups."""
+        delay_min = max(
+            1.0,
+            self._get_float_config(
+                "wakeup_interval_min",
+                WAKEUP_INTERVAL_MIN_DEFAULT,
+            ),
+        )
+        delay_max = max(
+            delay_min,
+            self._get_float_config(
+                "wakeup_interval_max",
+                WAKEUP_INTERVAL_MAX_DEFAULT,
+            ),
+        )
+        return delay_min, delay_max
 
     def _track_task(self, task: asyncio.Task) -> None:
         self._pending_tasks.add(task)

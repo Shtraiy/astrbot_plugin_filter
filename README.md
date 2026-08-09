@@ -90,8 +90,10 @@ pip install -r requirements.txt
 | `multi_message` | bool | `true` | 是否将分段结果逐条发送；单次回复最多发送 5 条消息，关闭后保留空行排版并合并为一条消息 |
 | `delay_min` | float | `2.0` | 分段消息间隔下限，运行时限制在 2~5 秒 |
 | `delay_max` | float | `5.0` | 分段消息间隔上限，运行时限制在 2~5 秒 |
-| `gate_seconds` | float | `0.0` | 闸门时间：最后一条消息发送完成后，等待此时间再接受同一来源的新唤醒；`0` 表示发送完成后立即接受 |
+| `gate_seconds` | float | `0.0` | 闸门时间：最后一条消息发送完成后，等待此时间再接受新的唤醒；`0` 表示发送完成后立即接受 |
 | `gate_ttl_seconds` | float | `300.0` | 闸门最大存活时间：请求异常中断或回复从未完成时自动释放闸门，避免该来源永久无法唤醒；`0` 禁用 |
+| `wakeup_interval_min` | float | `1.0` | 全局唤醒间隔下限；运行时不会低于 1 秒 |
+| `wakeup_interval_max` | float | `2.0` | 全局唤醒间隔上限；默认在 1～2 秒之间随机等待 |
 | `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
 | `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
 | `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
@@ -99,6 +101,8 @@ pip install -r requirements.txt
 | `onboarding_guard_messages` | int | `20` | 新群聊严格防护覆盖的 LLM 请求次数 |
 
 启用 LLM 功能时，需要先在 AstrBot 中配置可用的 LLM provider，并填写 `llm_provider_id`。LLM 不可用或输出不符合校验要求时，插件会自动使用规则处理。
+
+唤醒调度采用全局 FIFO：同一时间只处理一条唤醒，当前回复之外最多保留 3 条等待中的唤醒；队列满时丢弃最新唤醒。当前完整回复结束后，下一条唤醒至少等待 1 秒才会进入 LLM，实际间隔默认随机为 1～2 秒。`gate_seconds` 如果设置得更大，则使用两者中的较大值。
 
 ## 🧰 环境依赖
 

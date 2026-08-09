@@ -1,13 +1,18 @@
-"""Coordinate reply locks, wake-up gates, and reply completion."""
+"""Coordinate global wake-up admission, reply locks, and completion."""
 
 from __future__ import annotations
 
 import asyncio
+import random
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from astrbot.api import logger
+
+
+MAX_PENDING_WAKEUPS = 3
 
 
 @dataclass
@@ -30,8 +35,15 @@ class ReplySession:
     followup_task: asyncio.Task | None = None
 
 
+@dataclass
+class _WakeupTicket:
+    event: Any
+    ready: asyncio.Event
+    admitted: bool = False
+
+
 class ReplyCoordinator:
-    """Own the state transitions shared by all reply-related hooks."""
+    """Own global wake-up admission and the reply lifecycle."""
 
     def __init__(
         self,
@@ -42,10 +54,15 @@ class ReplyCoordinator:
         is_proactive_event: Callable[[Any | None], bool],
         schedule_cancel: Callable[[Any], None] | None = None,
         proactive_identity: Callable[[Any | None], str] | None = None,
+        get_wakeup_interval: Callable[[], tuple[float, float]] | None = None,
         gates: dict[str, GateState] | None = None,
         reply_locks: dict[str, asyncio.Lock] | None = None,
         max_gate_states: int = 4096,
+        max_pending_wakeups: int = MAX_PENDING_WAKEUPS,
         now: Callable[[], float] | None = None,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
+        ttl_sleep: Callable[[float], Awaitable[None]] | None = None,
+        random_delay: Callable[[float, float], float] | None = None,
     ):
         self._get_gate_seconds = get_gate_seconds
         self._get_gate_ttl_seconds = get_gate_ttl_seconds
@@ -53,82 +70,260 @@ class ReplyCoordinator:
         self._is_proactive_event = is_proactive_event
         self._schedule_cancel = schedule_cancel or (lambda _event: None)
         self._proactive_identity = proactive_identity or self._default_proactive_identity
+        self._get_wakeup_interval = get_wakeup_interval or (lambda: (1.0, 2.0))
         self._max_gate_states = max_gate_states
+        self._max_pending_wakeups = max(0, int(max_pending_wakeups))
         self._now = now or time.monotonic
+        self._sleep = sleep or asyncio.sleep
+        self._ttl_sleep = ttl_sleep or asyncio.sleep
+        self._random_delay = random_delay or random.uniform
+
         self.gates = gates if gates is not None else {}
         self.reply_locks = reply_locks if reply_locks is not None else {}
         self.pending_sends: dict[str, tuple[str, asyncio.Lock, Any]] = {}
         self.pending_send: tuple[str, asyncio.Lock, Any] | None = None
+
+        self._active_event: Any | None = None
+        self._active_started_at = 0.0
+        self._active_ttl_task: asyncio.Task | None = None
+        self._pending_wakeups: deque[_WakeupTicket] = deque()
+        self._wakeup_tickets: dict[int, _WakeupTicket] = {}
+        self._promotion_task: asyncio.Task | None = None
+        self._cancelled_event_ids: set[int] = set()
         self._superseded_event_ids: dict[int, Any] = {}
 
-    def claim_wakeup(self, event: Any) -> bool:
+    @property
+    def active_event(self) -> Any | None:
+        self._cleanup_expired()
+        return self._active_event
+
+    @property
+    def pending_wakeup_count(self) -> int:
+        self._cleanup_expired()
+        return len(self._pending_wakeups)
+
+    async def admit_wakeup(self, event: Any) -> bool:
+        """Wait for a global FIFO slot before allowing AstrBot to continue."""
         if not event or not self._event_is_wake_up(event):
             return True
 
         self._cleanup_expired()
-        if not self._is_proactive_event(event):
-            self.mark_user_priority(event)
+        if self._event_matches(self._active_event, event):
             return True
-
-        key = self._gate_key(event)
-        if self._gate_is_active(event):
-            state = self.gates.get(key)
-            if state is None or not self.events_correlate(state.owner_event, event):
-                if state is not None and self._is_new_proactive_attempt(
-                    state.owner_event,
-                    event,
-                ):
-                    self._supersede_owner(state.owner_event, replace_gate=True)
-                    self.gates[key] = GateState(
-                        owner_event=event,
-                        created_at=self._now(),
-                    )
-                    return True
-                logger.info("[语言优化] 丢弃唤醒：同一来源仍有请求在途或处于冷却 origin=%s", key)
-                self._stop_event(event)
-                return False
-            return True
-
-        if len(self.gates) >= self._max_gate_states:
-            self._stop_event(event)
+        if id(event) in self._cancelled_event_ids:
             return False
-        self.gates[key] = GateState(owner_event=event, created_at=self._now())
+
+        existing = self._find_ticket(event)
+        if existing is not None:
+            return await self._wait_for_ticket(existing)
+
+        if (
+            self._active_event is None
+            and not self._pending_wakeups
+            and self._promotion_task is None
+        ):
+            self._activate(event)
+            return True
+
+        if len(self._pending_wakeups) >= self._max_pending_wakeups:
+            self._stop_event(event)
+            logger.info(
+                "[语言优化] 全局唤醒队列已满，丢弃新唤醒 pending=%d",
+                len(self._pending_wakeups),
+            )
+            return False
+
+        ticket = _WakeupTicket(event=event, ready=asyncio.Event())
+        self._pending_wakeups.append(ticket)
+        self._wakeup_tickets[id(event)] = ticket
+        logger.info(
+            "[语言优化] 唤醒进入全局队列 pending=%d/%d",
+            len(self._pending_wakeups),
+            self._max_pending_wakeups,
+        )
+        return await self._wait_for_ticket(ticket)
+
+    async def _wait_for_ticket(self, ticket: _WakeupTicket) -> bool:
+        try:
+            await ticket.ready.wait()
+            return ticket.admitted
+        except asyncio.CancelledError:
+            if not ticket.admitted:
+                self._remove_ticket(ticket)
+                logger.info("[语言优化] 排队唤醒等待被取消，已释放队列位置")
+            raise
+
+    def finish_active(self, event: Any | None, *, apply_cooldown: bool = False) -> bool:
+        """Finish an active reply once, then schedule the next FIFO ticket."""
+        self._cleanup_expired()
+        return self._finish_active(event, apply_cooldown=apply_cooldown)
+
+    def _finish_active(self, event: Any | None, *, apply_cooldown: bool = False) -> bool:
+        if event is None or not self._event_matches(self._active_event, event):
+            return False
+
+        active = self._active_event
+        self._active_event = None
+        self._active_started_at = 0.0
+        self._cancel_active_ttl_task()
+        self._release_legacy_gate(active)
+
+        delay_min, delay_max = self._get_wakeup_interval()
+        delay_min = max(0.0, float(delay_min))
+        delay_max = max(delay_min, float(delay_max))
+        mechanical_delay = self._random_delay(delay_min, delay_max)
+        try:
+            mechanical_delay = max(0.0, float(mechanical_delay))
+        except (TypeError, ValueError):
+            mechanical_delay = delay_min
+        try:
+            gate_seconds = max(0.0, float(self._get_gate_seconds()))
+        except (TypeError, ValueError):
+            gate_seconds = 0.0
+        delay = max(mechanical_delay, gate_seconds)
+        self._schedule_promotion(delay)
+        logger.info(
+            "[语言优化] active 回复完成，准备推进全局队列 delay=%.2fs pending=%d",
+            delay,
+            len(self._pending_wakeups),
+        )
         return True
 
-    def mark_user_priority(self, event: Any) -> bool:
-        """Mark an older proactive gate stale without blocking the user event."""
-        key = self._gate_key(event)
-        state = self.gates.get(key)
-        if state is None or state.owner_event is None:
-            return True
-        if not self._is_proactive_event(state.owner_event):
-            return True
-        if self.events_correlate(state.owner_event, event):
-            return True
+    def _schedule_promotion(self, delay: float) -> None:
+        existing = self._promotion_task
+        if existing is not None and not existing.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._promotion_task = None
+            return
+        try:
+            self._promotion_task = loop.create_task(
+                self._promote_next_after_delay(delay)
+            )
+            self._promotion_task.add_done_callback(self._clear_promotion_task)
+        except RuntimeError:
+            self._promotion_task = None
 
-        self._supersede_owner(state.owner_event, state)
-        logger.info("[语言优化] 用户消息优先：标记同源主动请求失效 origin=%s", key)
+    async def _promote_next_after_delay(self, delay: float) -> None:
+        await self._sleep(delay)
+        while self._pending_wakeups and self._active_event is None:
+            ticket = self._pending_wakeups.popleft()
+            self._wakeup_tickets.pop(id(ticket.event), None)
+            if id(ticket.event) in self._cancelled_event_ids:
+                continue
+            self._activate(ticket.event, ticket=ticket)
+            return
+
+    def _clear_promotion_task(self, task: asyncio.Task) -> None:
+        if self._promotion_task is task:
+            self._promotion_task = None
+        try:
+            task.exception()
+        except (asyncio.CancelledError, Exception):
+            return
+
+    def _activate(self, event: Any, ticket: _WakeupTicket | None = None) -> None:
+        if self._active_event is not None:
+            return
+        self._active_event = event
+        self._active_started_at = self._now()
+        self._cancelled_event_ids.discard(id(event))
+        self.gates[self._gate_key(event)] = GateState(
+            owner_event=event,
+            created_at=self._active_started_at,
+        )
+        self._start_active_ttl(event)
+        if ticket is not None:
+            ticket.admitted = True
+            ticket.ready.set()
+
+    def _start_active_ttl(self, event: Any) -> None:
+        self._cancel_active_ttl_task()
+        try:
+            ttl = float(self._get_gate_ttl_seconds())
+        except (TypeError, ValueError):
+            ttl = 0.0
+        if ttl <= 0:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._active_ttl_task = None
+            return
+        try:
+            self._active_ttl_task = loop.create_task(
+                self._expire_active_after(event, ttl)
+            )
+        except RuntimeError:
+            self._active_ttl_task = None
+
+    async def _expire_active_after(self, event: Any, ttl: float) -> None:
+        try:
+            await self._ttl_sleep(ttl)
+        except asyncio.CancelledError:
+            return
+        if self._event_matches(self._active_event, event):
+            self._cancelled_event_ids.add(id(event))
+            self._stop_event(event)
+            logger.warning("[语言优化] active 回复超时，推进全局唤醒队列")
+            self._finish_active(event)
+
+    def _cancel_active_ttl_task(self) -> None:
+        task = self._active_ttl_task
+        self._active_ttl_task = None
+        if task is None or task.done():
+            return
+        if task is not asyncio.current_task():
+            task.cancel()
+
+    def _find_ticket(self, event: Any) -> _WakeupTicket | None:
+        ticket = self._wakeup_tickets.get(id(event))
+        if ticket is not None:
+            return ticket
+        for candidate in self._pending_wakeups:
+            if self._event_matches(candidate.event, event):
+                return candidate
+        return None
+
+    def _remove_ticket(self, ticket: _WakeupTicket) -> None:
+        try:
+            self._pending_wakeups.remove(ticket)
+        except ValueError:
+            pass
+        self._wakeup_tickets.pop(id(ticket.event), None)
+
+    def claim_wakeup(self, event: Any) -> bool:
+        """Compatibility shim for synchronous callers.
+
+        Normal hooks must use :meth:`admit_wakeup` so queued events are retained.
+        """
+        if not event or not self._event_is_wake_up(event):
+            return True
+        self._cleanup_expired()
+        if self._event_matches(self._active_event, event):
+            return True
+        if self._active_event is None and not self._pending_wakeups and self._promotion_task is None:
+            self._activate(event)
+            return True
+        self._stop_event(event)
+        return False
+
+    def mark_user_priority(self, event: Any) -> bool:
+        """FIFO mode never preempts the active reply."""
         return True
 
     def discard_superseded_result(self, event: Any) -> bool:
-        if not self._is_proactive_event(event):
+        self._cleanup_expired()
+        if id(event) not in self._cancelled_event_ids:
             return False
-        state = self.gates.get(self._gate_key(event))
-        superseded = id(event) in self._superseded_event_ids
-        if not superseded and (state is None or not state.superseded_by_user):
-            return False
-        if not superseded and not self.events_correlate(state.owner_event, event):
-            return False
-
         result = getattr(event, "get_result", lambda: None)()
         chain = getattr(result, "chain", None) if result is not None else None
         if chain is not None:
             result.chain = []
         self._stop_event(event)
-        if not superseded:
-            self._release_gate(event, apply_cooldown=False)
-        self._superseded_event_ids.pop(id(event), None)
-        logger.info("[语言优化] 已丢弃被用户消息取代的主动回复 origin=%s", self._gate_key(event))
+        self._cancelled_event_ids.discard(id(event))
         return True
 
     async def acquire_reply(self, event: Any) -> ReplySession:
@@ -141,29 +336,22 @@ class ReplyCoordinator:
             owner_event=event,
             reply_lock=reply_lock,
             gate_tracked=state is not None,
-            superseded_by_user=bool(state and state.superseded_by_user),
-            cancel_requested=bool(state and state.cancel_requested),
+            superseded_by_user=False,
+            cancel_requested=id(event) in self._cancelled_event_ids,
         )
 
     def register_followup(self, session: ReplySession, task: asyncio.Task) -> None:
         session.followup_task = task
 
     def session_cancelled(self, session: ReplySession) -> bool:
-        """Return whether a live reply session must stop sending follow-ups."""
         if session.cancel_requested or session.superseded_by_user:
             return True
-
         self._cleanup_expired()
-        state = self.gates.get(session.origin)
-        if state is None:
-            # Some integrations invoke the decorating hook without the
-            # waiting hook that normally creates the gate first.
-            return session.gate_tracked
-        if state.owner_event is None:
-            return state.cancel_requested or state.superseded_by_user
-        if not self.events_correlate(state.owner_event, session.owner_event):
+        if id(session.owner_event) in self._cancelled_event_ids:
             return True
-        return state.cancel_requested or state.superseded_by_user
+        if self._active_event is None:
+            return session.gate_tracked
+        return not self._event_matches(self._active_event, session.owner_event)
 
     def register_pending_send(self, session: ReplySession) -> None:
         pending = (session.origin, session.reply_lock, session.owner_event)
@@ -175,8 +363,7 @@ class ReplyCoordinator:
             session.reply_lock.release()
         if self.reply_locks.get(session.origin) is session.reply_lock:
             self.reply_locks.pop(session.origin, None)
-        if session.owner_event is not None:
-            self._release_gate(session.owner_event, apply_cooldown=apply_cooldown)
+        self.finish_active(session.owner_event, apply_cooldown=apply_cooldown)
 
     def release_after_send(self, event: Any) -> None:
         origin = self._gate_key(event)
@@ -192,94 +379,50 @@ class ReplyCoordinator:
             return
 
         if origin not in self.reply_locks:
-            self._release_gate(event)
+            self.finish_active(event)
 
     def gate_is_active(self, event: Any | None = None) -> bool:
         self._cleanup_expired()
         if event is None:
-            return bool(self.gates)
-        return self._gate_key(event) in self.gates
+            return bool(
+                self._active_event
+                or self._pending_wakeups
+                or self._promotion_task is not None
+            )
+        if self._event_matches(self._active_event, event):
+            return True
+        return self._find_ticket(event) is not None
 
     def release_gate(self, owner_event: Any, apply_cooldown: bool = False) -> None:
-        self._release_gate(owner_event, apply_cooldown=apply_cooldown)
+        self.finish_active(owner_event, apply_cooldown=apply_cooldown)
 
     def _release_gate(self, owner_event: Any, *, apply_cooldown: bool = False) -> None:
+        self.finish_active(owner_event, apply_cooldown=apply_cooldown)
+
+    def _release_legacy_gate(self, owner_event: Any | None) -> None:
+        if owner_event is None:
+            return
         key = self._gate_key(owner_event)
         state = self.gates.get(key)
-        if state is None:
-            return
-        if state.owner_event is None or not self.events_correlate(state.owner_event, owner_event):
-            return
-        if apply_cooldown:
-            cooldown = self._get_gate_seconds()
-            if cooldown > 0:
-                state.owner_event = None
-                state.cooldown_until = self._now() + cooldown
-                return
-        self.gates.pop(key, None)
+        if state is not None and self._event_matches(state.owner_event, owner_event):
+            self.gates.pop(key, None)
 
     def _cleanup_expired(self) -> None:
         now = self._now()
-        ttl = self._get_gate_ttl_seconds()
-        expired = [
-            key
-            for key, state in self.gates.items()
-            if (state.owner_event is None and state.cooldown_until <= now)
-            or (
-                ttl > 0
-                and state.owner_event is not None
-                and state.created_at > 0
-                and now - state.created_at > ttl
-            )
-        ]
-        for key in expired:
-            state = self.gates.pop(key, None)
-            if state is not None and state.owner_event is not None:
-                logger.warning("[语言优化] 唤醒闸门超时自动释放 origin=%s", key)
-        if len(self._superseded_event_ids) > self._max_gate_states:
-            stale_ids = list(self._superseded_event_ids)[: len(self._superseded_event_ids) - self._max_gate_states]
-            for stale_id in stale_ids:
-                self._superseded_event_ids.pop(stale_id, None)
-
-    def _supersede_owner(
-        self,
-        owner_event: Any,
-        state: GateState | None = None,
-        *,
-        replace_gate: bool = False,
-    ) -> None:
-        if owner_event is None:
-            return
-        if state is not None:
-            state.superseded_by_user = True
-        if replace_gate:
-            self._superseded_event_ids[id(owner_event)] = owner_event
-        if state is None or not state.cancel_requested:
-            if state is not None:
-                state.cancel_requested = True
-            self._schedule_cancel(owner_event)
-
-    def _is_new_proactive_attempt(self, owner: Any | None, candidate: Any) -> bool:
-        owner_identity = self._proactive_identity(owner)
-        candidate_identity = self._proactive_identity(candidate)
-        return bool(owner_identity and candidate_identity and owner_identity != candidate_identity)
-
-    @staticmethod
-    def _default_proactive_identity(event: Any | None) -> str:
-        if event is None:
-            return ""
-        for field in (
-            "_private_companion_proactive_chat_attempt_id",
-            "_private_companion_proactive_chat_token",
+        try:
+            ttl = float(self._get_gate_ttl_seconds())
+        except (TypeError, ValueError):
+            ttl = 0.0
+        if (
+            self._active_event is not None
+            and ttl > 0
+            and self._active_started_at > 0
+            and now - self._active_started_at > ttl
         ):
-            value = str(getattr(event, field, "") or "").strip()
-            if value:
-                return f"{field}:{value}"
-        return ""
-
-    def _gate_is_active(self, event: Any) -> bool:
-        self._cleanup_expired()
-        return self._gate_key(event) in self.gates
+            expired = self._active_event
+            self._cancelled_event_ids.add(id(expired))
+            self._stop_event(expired)
+            self._finish_active(expired)
 
     @staticmethod
     def _gate_key(event: Any) -> str:
@@ -291,6 +434,10 @@ class ReplyCoordinator:
         stopper = getattr(event, "stop_event", None)
         if callable(stopper):
             stopper()
+
+    @classmethod
+    def _event_matches(cls, owner: Any | None, candidate: Any | None) -> bool:
+        return cls.events_correlate(owner, candidate)
 
     @staticmethod
     def _event_correlation_ids(event: Any | None) -> set[str]:
@@ -308,3 +455,16 @@ class ReplyCoordinator:
         if owner is candidate and owner is not None:
             return True
         return bool(cls._event_correlation_ids(owner) & cls._event_correlation_ids(candidate))
+
+    @staticmethod
+    def _default_proactive_identity(event: Any | None) -> str:
+        if event is None:
+            return ""
+        for field in (
+            "_private_companion_proactive_chat_attempt_id",
+            "_private_companion_proactive_chat_token",
+        ):
+            value = str(getattr(event, field, "") or "").strip()
+            if value:
+                return f"{field}:{value}"
+        return ""
