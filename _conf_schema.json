@@ -24,6 +24,12 @@
     "hint": "开启后使用 LLM 进行语义分段；关闭则使用规则分段。",
     "default": false
   },
+  "segment_min_chars": {
+    "description": "触发分段的最少字符数",
+    "type": "int",
+    "hint": "回复长度超过该值才会尝试 LLM/规则分段；默认 80，最小 20。",
+    "default": 80
+  },
   "enable_de_ai_flavor": {
     "description": "启用正则去 AI 味",
     "type": "bool",
@@ -95,6 +101,12 @@
     "type": "float",
     "hint": "上一条完整回复结束后，下一条排队唤醒开始思考前的最大等待时间；默认与下限形成 1～2 秒随机间隔。",
     "default": 2.0
+  },
+  "queue_full_notice": {
+    "description": "唤醒队列满时的提示文案",
+    "type": "string",
+    "hint": "全局队列最多保留 3 条等待中的唤醒，满时丢弃最新消息；填写文案会在丢弃时发送给对应会话，留空则不发送。",
+    "default": "队列繁忙，请稍后再试。"
   },
   "enable_content_guard": {
     "description": "启用群聊内容防护",

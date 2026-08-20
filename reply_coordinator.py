@@ -19,9 +19,6 @@ MAX_PENDING_WAKEUPS = 3
 class GateState:
     owner_event: Any | None
     created_at: float = 0.0
-    cooldown_until: float = 0.0
-    superseded_by_user: bool = False
-    cancel_requested: bool = False
 
 
 @dataclass
@@ -30,8 +27,6 @@ class ReplySession:
     owner_event: Any | None
     reply_lock: asyncio.Lock
     gate_tracked: bool = False
-    superseded_by_user: bool = False
-    cancel_requested: bool = False
     followup_task: asyncio.Task | None = None
 
 
@@ -51,9 +46,7 @@ class ReplyCoordinator:
         get_gate_seconds: Callable[[], float],
         get_gate_ttl_seconds: Callable[[], float],
         event_is_wake_up: Callable[[Any], bool],
-        is_proactive_event: Callable[[Any | None], bool],
-        schedule_cancel: Callable[[Any], None] | None = None,
-        proactive_identity: Callable[[Any | None], str] | None = None,
+        notify_dropped: Callable[[Any], None] | None = None,
         get_wakeup_interval: Callable[[], tuple[float, float]] | None = None,
         gates: dict[str, GateState] | None = None,
         reply_locks: dict[str, asyncio.Lock] | None = None,
@@ -67,9 +60,7 @@ class ReplyCoordinator:
         self._get_gate_seconds = get_gate_seconds
         self._get_gate_ttl_seconds = get_gate_ttl_seconds
         self._event_is_wake_up = event_is_wake_up
-        self._is_proactive_event = is_proactive_event
-        self._schedule_cancel = schedule_cancel or (lambda _event: None)
-        self._proactive_identity = proactive_identity or self._default_proactive_identity
+        self._notify_dropped = notify_dropped or (lambda _event: None)
         self._get_wakeup_interval = get_wakeup_interval or (lambda: (1.0, 2.0))
         self._max_gate_states = max_gate_states
         self._max_pending_wakeups = max(0, int(max_pending_wakeups))
@@ -90,7 +81,7 @@ class ReplyCoordinator:
         self._wakeup_tickets: dict[int, _WakeupTicket] = {}
         self._promotion_task: asyncio.Task | None = None
         self._cancelled_event_ids: set[int] = set()
-        self._superseded_event_ids: dict[int, Any] = {}
+        self._queue_full_notified = False
 
     @property
     def active_event(self) -> Any | None:
@@ -131,6 +122,15 @@ class ReplyCoordinator:
                 "[语言优化] 全局唤醒队列已满，丢弃新唤醒 pending=%d",
                 len(self._pending_wakeups),
             )
+            if not self._queue_full_notified:
+                self._queue_full_notified = True
+                try:
+                    self._notify_dropped(event)
+                except Exception:
+                    logger.debug(
+                        "[语言优化] 队列满提示发送失败",
+                        exc_info=True,
+                    )
             return False
 
         ticket = _WakeupTicket(event=event, ready=asyncio.Event())
@@ -180,7 +180,7 @@ class ReplyCoordinator:
             gate_seconds = max(0.0, float(self._get_gate_seconds()))
         except (TypeError, ValueError):
             gate_seconds = 0.0
-        delay = max(mechanical_delay, gate_seconds)
+        delay = max(mechanical_delay, gate_seconds) if apply_cooldown else mechanical_delay
         self._schedule_promotion(delay)
         logger.info(
             "[语言优化] active 回复完成，准备推进全局队列 delay=%.2fs pending=%d",
@@ -211,6 +211,7 @@ class ReplyCoordinator:
         while self._pending_wakeups and self._active_event is None:
             ticket = self._pending_wakeups.popleft()
             self._wakeup_tickets.pop(id(ticket.event), None)
+            self._queue_full_notified = False
             if id(ticket.event) in self._cancelled_event_ids:
                 continue
             self._activate(ticket.event, ticket=ticket)
@@ -265,7 +266,7 @@ class ReplyCoordinator:
         except asyncio.CancelledError:
             return
         if self._event_matches(self._active_event, event):
-            self._cancelled_event_ids.add(id(event))
+            self._remember_cancelled(event)
             self._stop_event(event)
             logger.warning("[语言优化] active 回复超时，推进全局唤醒队列")
             self._finish_active(event)
@@ -293,26 +294,13 @@ class ReplyCoordinator:
         except ValueError:
             pass
         self._wakeup_tickets.pop(id(ticket.event), None)
+        self._queue_full_notified = False
 
-    def claim_wakeup(self, event: Any) -> bool:
-        """Compatibility shim for synchronous callers.
-
-        Normal hooks must use :meth:`admit_wakeup` so queued events are retained.
-        """
-        if not event or not self._event_is_wake_up(event):
-            return True
-        self._cleanup_expired()
-        if self._event_matches(self._active_event, event):
-            return True
-        if self._active_event is None and not self._pending_wakeups and self._promotion_task is None:
-            self._activate(event)
-            return True
-        self._stop_event(event)
-        return False
-
-    def mark_user_priority(self, event: Any) -> bool:
-        """FIFO mode never preempts the active reply."""
-        return True
+    def _remember_cancelled(self, event: Any) -> None:
+        """Track an event whose late result must be discarded, bounded to avoid leaks."""
+        self._cancelled_event_ids.add(id(event))
+        while len(self._cancelled_event_ids) > self._max_gate_states:
+            self._cancelled_event_ids.pop()
 
     def discard_superseded_result(self, event: Any) -> bool:
         self._cleanup_expired()
@@ -336,16 +324,12 @@ class ReplyCoordinator:
             owner_event=event,
             reply_lock=reply_lock,
             gate_tracked=state is not None,
-            superseded_by_user=False,
-            cancel_requested=id(event) in self._cancelled_event_ids,
         )
 
     def register_followup(self, session: ReplySession, task: asyncio.Task) -> None:
         session.followup_task = task
 
     def session_cancelled(self, session: ReplySession) -> bool:
-        if session.cancel_requested or session.superseded_by_user:
-            return True
         self._cleanup_expired()
         if id(session.owner_event) in self._cancelled_event_ids:
             return True
@@ -381,18 +365,6 @@ class ReplyCoordinator:
         if origin not in self.reply_locks:
             self.finish_active(event)
 
-    def gate_is_active(self, event: Any | None = None) -> bool:
-        self._cleanup_expired()
-        if event is None:
-            return bool(
-                self._active_event
-                or self._pending_wakeups
-                or self._promotion_task is not None
-            )
-        if self._event_matches(self._active_event, event):
-            return True
-        return self._find_ticket(event) is not None
-
     def release_gate(self, owner_event: Any, apply_cooldown: bool = False) -> None:
         self.finish_active(owner_event, apply_cooldown=apply_cooldown)
 
@@ -420,7 +392,7 @@ class ReplyCoordinator:
             and now - self._active_started_at > ttl
         ):
             expired = self._active_event
-            self._cancelled_event_ids.add(id(expired))
+            self._remember_cancelled(expired)
             self._stop_event(expired)
             self._finish_active(expired)
 
@@ -455,16 +427,3 @@ class ReplyCoordinator:
         if owner is candidate and owner is not None:
             return True
         return bool(cls._event_correlation_ids(owner) & cls._event_correlation_ids(candidate))
-
-    @staticmethod
-    def _default_proactive_identity(event: Any | None) -> str:
-        if event is None:
-            return ""
-        for field in (
-            "_private_companion_proactive_chat_attempt_id",
-            "_private_companion_proactive_chat_token",
-        ):
-            value = str(getattr(event, field, "") or "").strip()
-            if value:
-                return f"{field}:{value}"
-        return ""

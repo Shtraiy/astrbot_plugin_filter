@@ -154,7 +154,13 @@ _SYSTEM_PATH_RE = re.compile(r"(?:/AstrBot|/etc/|/var/|/root/|/tmp/|/opt/|/usr/|
 _SHELL_CMD_RE = re.compile(r"(?:^|[\s\u3002\uff01\uff1f])(?:shell_exec|bash\s+-c|sh\s+-c|cmd\.exe|powershell|sudo\s+|chmod\s+|chown\s+|pip\s+install|npm\s+install|python\d?\s+[A-Za-z0-9_./\\-]+|node\s+[A-Za-z0-9_./\\-]+|rm\s+-rf|git\s+(?:clone|push|pull)|wget\s+|curl\s+)[^\n\u3002\uff01\uff1f]{0,120}", re.IGNORECASE)
 _INTERNAL_IP_RE = re.compile(r"\b(?:127\.0\.0\.\d+|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|localhost|0\.0\.0\.0)\b(?::\d+)?", re.IGNORECASE)
 _URL_RE = re.compile(r"\b(?:https?://)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?::\d+)?(?:/[^\s\u3002\uff0c\uff01\uff1f\"'\uff09)]*)?", re.IGNORECASE)
-_SYSTEM_INFO_LINE_RE = re.compile(r"(?:\u8fdb\u7a0b\u5217\u8868|\u8fd0\u884c\u8fdb\u7a0b|\u540e\u53f0\u8fdb\u7a0b|\u6570\u636e\u5e93\u8fde\u63a5|\u914d\u7f6e\u6587\u4ef6|\u73af\u5883\u53d8\u91cf|API.?key|access.?token|password|secret|\.env\b|\.config\b|\.conf\b|\.ini\b)\S*", re.IGNORECASE)
+_SYSTEM_INFO_LINE_RE = re.compile(
+    r"(?:\u8fdb\u7a0b\u5217\u8868|\u8fd0\u884c\u8fdb\u7a0b|\u540e\u53f0\u8fdb\u7a0b|"
+    r"\u6570\u636e\u5e93\u8fde\u63a5|\u914d\u7f6e\u6587\u4ef6|\u73af\u5883\u53d8\u91cf|"
+    r"API.?key|access.?token|password|secret|\.env\b|\.config\b|\.conf\b|\.ini\b)"
+    r"\s*(?:[:：=][ \t]*[^\s，。！？；,，]*|[/\\][^\s，。！？；,，]*)",
+    re.IGNORECASE,
+)
 _FILE_EXT_RE = re.compile(
     r"\.(?:py|pyw|pyc|js|ts|jsx|tsx|json|txt|md|markdown|yml|yaml|toml|ini|conf|cfg|log|csv|tsv|xml|html?|css|png|jpe?g|gif|webp|svg|ico|bmp|pdf|docx?|xlsx?|pptx?|zip|tar|gz|7z|rar|exe|msi|dll|so|dylib|sh|bat|ps1|sql|db|sqlite|lock|env|example)$",
     re.IGNORECASE,

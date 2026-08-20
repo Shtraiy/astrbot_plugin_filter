@@ -21,3 +21,23 @@ def test_keeps_distinct_useful_paragraphs():
     ]
 
     assert dedupe_similar_paragraphs(paragraphs) == paragraphs
+
+
+def test_keeps_sequential_numbered_paragraphs():
+    paragraphs = [
+        "第一段内容。",
+        "第二段内容。",
+        "第三段内容。",
+        "第四段内容。",
+    ]
+
+    assert dedupe_similar_paragraphs(paragraphs) == paragraphs
+
+
+def test_keeps_distinct_list_items_with_shared_structure():
+    paragraphs = [
+        "1. 打开设置，找到网络选项，点击连接。",
+        "2. 打开设置，找到蓝牙选项，点击连接。",
+    ]
+
+    assert dedupe_similar_paragraphs(paragraphs) == paragraphs

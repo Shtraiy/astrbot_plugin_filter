@@ -2,7 +2,7 @@
 
 # AstrBot 语言逻辑优化大师
 
-[![version](https://img.shields.io/badge/version-v2.6.3-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v2.7.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -11,14 +11,13 @@
 
 ## Refactor architecture
 
-The outbound path is split into four responsibilities:
+The outbound path is split into three responsibilities:
 
 - `outbound_pipeline.py` keeps the existing metadata, tool-trace, sensitive-content, Markdown, and style cleanup order.
-- `reply_coordinator.py` owns reply locks, wake-up gates, user-priority invalidation, cooldowns, and completion callbacks.
+- `reply_coordinator.py` owns reply locks, wake-up gates, cooldowns, and completion callbacks.
 - `message_dispatcher.py` is the single delayed follow-up sender and releases the owning reply session even when sending fails.
-- `private_companion_adapter.py` contains the optional Private Companion marker detection and cancellation API lookup.
 
-The cleanup stages are intentionally retained for compatibility. Private Companion remains optional: an unavailable adapter cannot block ordinary replies.
+The cleanup stages are intentionally retained for compatibility.
 
 > **astrbot_plugin_filter** 是一个用于 AstrBot 的输出后处理插件，能够在消息发送前清理模型输出中的元数据、工具叙述和敏感信息，并提供 LLM 文风优化、智能分段、消息串行发送与列表图片渲染等能力。
 
@@ -29,9 +28,9 @@ The cleanup stages are intentionally retained for compatibility. Private Compani
 - 检测到工具调用流程泄露时，直接替换为正常的用户可见提示。
 - 删除工具调用过程中的内部叙述，并将工具函数名转换为更自然的中文描述。
 - 使用规则或 LLM 优化 AI 味表达。
-- 支持 LLM 智能分段，失败时自动降级到规则分段。
+- 支持 LLM 智能分段，失败时自动降级到规则分段；编号/项目符号/中文序数等特殊格式直接机械分段，不调用 LLM。
 - 将常见 Markdown 语法转换为适合 QQ 展示的纯文本。
-- 将分段结果按多条消息发送，并自动合并高度相似的重复段落。
+- 将分段结果按多条消息发送，并合并重复段落及工具流程叙述中高度相似的段落。
 - 同一群聊内按顺序发送不同用户的完整回复，避免消息交错。
 - 可选：将编号列表渲染为图片发送。
 - 防护群聊输入和输出内容，拦截配置词库命中及常见诱导绕过请求。
@@ -49,7 +48,7 @@ AstrBot 生成回复
 工具叙述清理 -> 工具名脱敏 -> AI 味优化
         |
         v
-LLM 分段/文风优化 -> 规则分段降级 -> 重复段落合并
+特殊格式机械分段 -> LLM 文风优化 -> LLM 分段 -> 规则分段降级 -> 重复段落合并
         |
         v
 Markdown 纯文本化 -> 按会话串行发送
@@ -82,6 +81,7 @@ pip install -r requirements.txt
 | `enable_llm_style` | bool | `true` | 每条正常非空回复调用 LLM 润色，保留原意并适量删除八股文；需要配置 `llm_provider_id` |
 | `llm_timeout_seconds` | float | `15.0` | 单次 LLM 润色/分段最多等待时间；超时自动回退，最大 60 秒 |
 | `enable_llm_segment` | bool | `false` | 启用 LLM 语义分段 |
+| `segment_min_chars` | int | `80` | 触发分段的最少字符数；回复低于该值不尝试分段，最小 20 |
 | `enable_de_ai_flavor` | bool | `true` | 启用规则去 AI 味 |
 | `enable_image_render` | bool | `false` | 启用列表图片渲染 |
 | `image_min_list_items` | int | `3` | 触发图片渲染的最少列表项数 |
@@ -94,6 +94,7 @@ pip install -r requirements.txt
 | `gate_ttl_seconds` | float | `300.0` | 闸门最大存活时间：请求异常中断或回复从未完成时自动释放闸门，避免该来源永久无法唤醒；`0` 禁用 |
 | `wakeup_interval_min` | float | `1.0` | 全局唤醒间隔下限；运行时不会低于 1 秒 |
 | `wakeup_interval_max` | float | `2.0` | 全局唤醒间隔上限；默认在 1～2 秒之间随机等待 |
+| `queue_full_notice` | string | `队列繁忙，请稍后再试。` | 全局唤醒队列满、丢弃最新消息时发送的提示；同一轮丢弃只提示一次，留空则不发送 |
 | `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
 | `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
 | `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
@@ -102,7 +103,7 @@ pip install -r requirements.txt
 
 启用 LLM 功能时，需要先在 AstrBot 中配置可用的 LLM provider，并填写 `llm_provider_id`。LLM 不可用或输出不符合校验要求时，插件会自动使用规则处理。
 
-唤醒调度采用全局 FIFO：同一时间只处理一条唤醒，当前回复之外最多保留 3 条等待中的唤醒；队列满时丢弃最新唤醒。当前完整回复结束后，下一条唤醒至少等待 1 秒才会进入 LLM，实际间隔默认随机为 1～2 秒。`gate_seconds` 如果设置得更大，则使用两者中的较大值。
+唤醒调度采用全局 FIFO：同一时间只处理一条唤醒，当前回复之外最多保留 3 条等待中的唤醒；队列满时丢弃最新唤醒，并通过 `queue_full_notice` 提示对应会话（留空则静默丢弃）。当前完整回复结束后，下一条唤醒至少等待 1 秒才会进入 LLM，实际间隔默认随机为 1～2 秒。`gate_seconds` 如果设置得更大，则使用两者中的较大值。
 
 ## 🧰 环境依赖
 
@@ -120,7 +121,7 @@ pip install Pillow
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m py_compile main.py content_guard.py pipelines.py segmentation.py image_renderer.py outbound_pipeline.py reply_coordinator.py message_dispatcher.py private_companion_adapter.py
+python -m py_compile main.py content_guard.py pipelines.py segmentation.py image_renderer.py outbound_pipeline.py reply_coordinator.py message_dispatcher.py
 python -m pytest -q
 ```
 
@@ -132,6 +133,9 @@ astrbot_plugin_filter/
 ├── content_guard.py     # 输入/输出内容防护与诱导检测
 ├── pipelines.py         # 文本清理、脱敏和去 AI 味
 ├── segmentation.py      # LLM/规则分段、重复检测和多消息发送
+├── outbound_pipeline.py # 输出净化管线：清洗/脱敏/去 AI 味/分段/Markdown
+├── reply_coordinator.py # 全局唤醒队列、回复锁与完成回调
+├── message_dispatcher.py # 后续分段消息的延迟发送
 ├── image_renderer.py    # 列表图片渲染
 ├── _conf_schema.json     # AstrBot 配置项定义
 ├── metadata.yaml         # 插件元数据
@@ -150,20 +154,17 @@ astrbot_plugin_filter/
 
 ### LLM 分段没有生效
 
-确认已配置 `llm_provider_id`，并打开 `enable_llm_style`（默认开启）。插件会对每条正常非空回复尝试调用 LLM；调用失败、结果不合格或文本超出安全上限时自动降级，不影响普通规则处理。该功能会增加延迟和模型调用消耗。
+确认已配置 `llm_provider_id`，并打开 `enable_llm_segment`（默认关闭）。回复长度需要超过 `segment_min_chars`（默认 80 字符）才会尝试分段。若同时开启 `enable_llm_style`，插件会先润色再对结果分段；LLM 输出改动非空白内容、超时或失败时自动降级到规则分段。该功能会增加延迟和模型调用消耗。
 
 ### 群聊内容防护
 
 内容防护在用户请求进入 LLM 前和机器人最终发送前各检查一次。词库配置支持每行一个词或短语，也支持逗号分隔；检测会忽略常见空格、标点、零宽字符和 Unicode 变形。命中高风险内容时，机器人不会复述原文，而是发送中性提示。词库应根据实际群规和运营场景维护，插件不会内置会变化的具体词表。
 
-## 🤝 Private Companion 联动
+## ⚠️ 已知限制
 
-2.6.3 起，本插件与 [Private Companion](https://github.com/menglimi/astrbot_plugin_private_companion) 协同处理主动消息：
-
-- 普通用户消息拥有优先权，不会因同源主动请求处于在途而被丢弃。
-- 识别到 Private Companion 的主动请求后，用户新消息会使旧请求失效，并尽力请求取消。
-- 旧主动请求的过时回复会被丢弃，避免在用户消息后又发送。
-- Private Companion 未安装、API 不可用或取消失败时，本插件会自动降级，不影响原有过滤功能。
+- **流式输出**：AstrBot 在流式输出（`streaming_response`）过程中不会触发发送前钩子，文本会边生成边显示，插件的清洗/分段无法作用于中间过程；需要完整生效时，建议在 AstrBot provider 设置中关闭流式输出。
+- **旧版 AstrBot**：4.16 早期版本在丢弃唤醒后仍会短暂占用会话锁并构建 agent（新版已修复），建议升级到较新 4.x。
+- **与内置功能叠加**：AstrBot 自带的"分段回复"会在本插件之后再次处理第一条消息，建议两者只开启一个；第一条分段会带 @/引用，插件直发的后续分段不带，属于预期行为。
 
 ## 📄 许可证
 
@@ -175,6 +176,19 @@ astrbot_plugin_filter/
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
 
 ## 📝 更新日志
+
+### 2.7.0
+
+- 移除与 Private Companion 的联动：不再识别主动请求标记，也不再做用户优先抢占与主动取消；回复调度统一由全局 FIFO 队列管理。
+- 修复智能分段：新增 `segment_min_chars`（默认 80），回复长度超过该值即尝试分段；LLM 文风成功后不再跳过分段，长文本会先润色再分段。
+- 新增特殊格式机械分段：编号列表、项目符号列表、中文序数（第一步/第二点）等结构化内容直接按条目拆分，不调用 LLM，秒级完成。
+- 唤醒队列满时不再静默丢弃：新增 `queue_full_notice` 配置（默认发送"队列繁忙，请稍后再试。"），同一轮丢弃只提示一次，留空可关闭。
+- 机械分段遇到"标题："前缀时自动合并进第一条列表项，不再单独发送。
+- 修复多消息分段去重误删正常段落：顺序编号、共享结构的列表项不再被误判为重复。
+- 修复后续分段消息重复调用 LLM 润色导致的延迟与内容漂移；后续段落只做安全清洗，不再二次润色。
+- 修复 `gate_seconds` 在空回复/拦截等无发送路径上仍被应用的问题，并限制超时取消事件 id 的内存增长。
+- 修复敏感信息过滤误删"环境变量/配置文件/数据库连接"等正常叙述的问题。
+- 清理重构后遗留的死代码。
 
 ### 2.6.3
 

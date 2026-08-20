@@ -1,4 +1,5 @@
 import asyncio
+import re
 from types import SimpleNamespace
 
 from astrbot.api.message_components import Plain
@@ -105,8 +106,15 @@ def test_followups_reuse_outbound_pipeline(monkeypatch):
         def __init__(self, **_kwargs):
             pass
 
-        async def process(self, text, _event, *, strict_guard=False):
-            pipeline_calls.append(text)
+        async def process(
+            self,
+            text,
+            _event,
+            *,
+            strict_guard=False,
+            skip_llm_layout=False,
+        ):
+            pipeline_calls.append((text, skip_llm_layout))
             return SimpleNamespace(
                 text=f"clean:{text}",
                 changed=True,
@@ -125,7 +133,60 @@ def test_followups_reuse_outbound_pipeline(monkeypatch):
     asyncio.run(run())
 
     assert pipeline_calls == [
-        "first paragraph\n\nsecond paragraph",
-        "second paragraph",
+        ("first paragraph\n\nsecond paragraph", False),
+        ("second paragraph", True),
     ]
     assert context.sent[0][1].chain[0].text == "clean:second paragraph"
+
+
+def test_followups_do_not_trigger_second_llm_pass():
+    optimizer = object.__new__(LanguageLogicOptimizer)
+    optimizer.config = {
+        "enable_content_guard": False,
+        "enable_de_ai_flavor": False,
+        "enable_image_render": False,
+        "multi_message": True,
+        "enable_llm_style": True,
+        "enable_llm_segment": False,
+        "llm_provider_id": "test-provider",
+        "llm_timeout_seconds": 5.0,
+    }
+    calls = []
+
+    class LlmContext(FakeContext):
+        async def llm_generate(self, **kwargs):
+            calls.append(kwargs["chat_provider_id"])
+            prompt = kwargs["prompt"]
+            match = re.search(
+                r"<untrusted_original>\n(.*?)\n</untrusted_original>",
+                prompt,
+                re.S,
+            )
+            if match:
+                return SimpleNamespace(completion_text=match.group(1))
+            match = re.search(r"原文：\n(.*)", prompt, re.S)
+            return SimpleNamespace(
+                completion_text=match.group(1) if match else "",
+            )
+
+    context = LlmContext()
+    optimizer.context = context
+    optimizer._reply_locks = {}
+    optimizer._gates = {}
+    optimizer._pending_sends = {}
+    optimizer._pending_send = None
+    optimizer._onboarding_states = {}
+    optimizer._pending_tasks = set()
+    optimizer._get_delay_range = lambda: (0.0, 0.0)
+    result = SimpleNamespace(chain=[Plain("苹果很好吃。\n\n香蕉也很好。")])
+
+    async def run():
+        await optimizer.on_decorating_result(FakeEvent(result))
+        if optimizer._pending_tasks:
+            await asyncio.gather(*tuple(optimizer._pending_tasks))
+
+    asyncio.run(run())
+
+    assert calls == ["test-provider"]
+    assert len(context.sent) == 1
+    assert context.sent[0][1].chain[0].text == "香蕉也很好。"

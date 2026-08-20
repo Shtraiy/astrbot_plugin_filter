@@ -56,7 +56,7 @@ class MessageDispatcher:
                         text = await process_text(paragraph)
                     except Exception:
                         logger.warning(
-                            "[鍒嗘鍙戦€乚 鍚庣画娈靛鐞嗗け璐? index=%d",
+                            "[分段发送] 后续段处理失败 index=%d",
                             index + 2,
                             exc_info=True,
                         )

@@ -5,11 +5,10 @@ from main import LanguageLogicOptimizer
 
 
 class FakeEvent:
-    def __init__(self, wake=True, origin="", request_id=None, proactive=True):
+    def __init__(self, wake=True, origin="", request_id=None):
         self.wake = wake
         self.unified_msg_origin = origin
         self.request_id = request_id
-        self.private_companion_proactive_framework = proactive
         self.stopped = False
 
     def is_wake_up(self):
@@ -62,7 +61,7 @@ def test_wakeup_interval_has_one_second_floor_and_ordered_bounds():
 def test_global_queue_keeps_user_wakeups_without_preemption():
     optimizer = make_optimizer()
     first = FakeEvent(origin="group:1", request_id="first")
-    second = FakeEvent(origin="group:2", request_id="second", proactive=False)
+    second = FakeEvent(origin="group:2", request_id="second")
 
     async def run():
         await optimizer.on_waiting_llm_request(first)

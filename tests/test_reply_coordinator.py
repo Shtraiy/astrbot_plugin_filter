@@ -9,12 +9,10 @@ class FakeEvent:
         self,
         origin="group:1",
         *,
-        proactive=True,
         request_id=None,
         result=None,
     ):
         self.unified_msg_origin = origin
-        self.private_companion_proactive_framework = proactive
         self.request_id = request_id
         self.stopped = False
         self._result = result
@@ -29,16 +27,12 @@ class FakeEvent:
         return self._result
 
 
-def make_coordinator(scheduled=None, now=None):
+def make_coordinator(now=None):
     return ReplyCoordinator(
         get_gate_seconds=lambda: 0.0,
         get_gate_ttl_seconds=lambda: 300.0,
         get_wakeup_interval=lambda: (0.0, 0.0),
         event_is_wake_up=lambda event: bool(event.is_wake_up()),
-        is_proactive_event=lambda event: bool(
-            getattr(event, "private_companion_proactive_framework", False)
-        ),
-        schedule_cancel=(scheduled or (lambda _event: None)),
         now=now,
     )
 
@@ -46,7 +40,7 @@ def make_coordinator(scheduled=None, now=None):
 def test_user_message_is_queued_without_preempting_active_reply():
     coordinator = make_coordinator()
     active = FakeEvent(request_id="active")
-    user = FakeEvent(proactive=False, request_id="user")
+    user = FakeEvent(request_id="user")
 
     async def scenario():
         assert await coordinator.admit_wakeup(active)
@@ -56,12 +50,9 @@ def test_user_message_is_queued_without_preempting_active_reply():
         assert not user.stopped
         assert coordinator.active_event is active
 
-        coordinator.mark_user_priority(user)
         assert not coordinator.session_cancelled(
             SimpleNamespace(
                 owner_event=active,
-                cancel_requested=False,
-                superseded_by_user=False,
                 gate_tracked=True,
             )
         )
@@ -119,15 +110,23 @@ def test_session_is_cancelled_when_active_slot_expires():
     assert asyncio.run(scenario())
 
 
-def test_private_companion_cancel_is_not_scheduled_by_user_priority():
-    scheduled = []
-    coordinator = make_coordinator(scheduled.append)
-    active = FakeEvent(request_id="active")
-    user = FakeEvent(proactive=False, request_id="user")
+def test_cancelled_event_ids_stay_bounded():
+    now = [100.0]
+    coordinator = ReplyCoordinator(
+        get_gate_seconds=lambda: 0.0,
+        get_gate_ttl_seconds=lambda: 1.0,
+        get_wakeup_interval=lambda: (0.0, 0.0),
+        event_is_wake_up=lambda event: True,
+        now=lambda: now[0],
+        max_gate_states=4,
+    )
+    events = [FakeEvent(request_id=f"event-{index}") for index in range(10)]
 
     async def scenario():
-        assert await coordinator.admit_wakeup(active)
-        assert coordinator.mark_user_priority(user)
+        for event in events:
+            assert await coordinator.admit_wakeup(event)
+            now[0] += 2.0
+            _ = coordinator.active_event  # triggers expiry cleanup
+        return len(coordinator._cancelled_event_ids)
 
-    asyncio.run(scenario())
-    assert scheduled == []
+    assert asyncio.run(scenario()) <= 4

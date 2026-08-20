@@ -19,16 +19,25 @@ class FakeEvent:
         self.stopped = True
 
 
-def make_coordinator(*, gate_seconds=0.0, ttl=300.0, delay=(0.0, 0.0), random_delay=None, sleep=None, now=None):
+def make_coordinator(
+    *,
+    gate_seconds=0.0,
+    ttl=300.0,
+    delay=(0.0, 0.0),
+    random_delay=None,
+    sleep=None,
+    now=None,
+    notify_dropped=None,
+):
     return ReplyCoordinator(
         get_gate_seconds=lambda: gate_seconds,
         get_gate_ttl_seconds=lambda: ttl,
         get_wakeup_interval=lambda: delay,
         event_is_wake_up=lambda event: event.is_wake_up(),
-        is_proactive_event=lambda _event: False,
         now=now,
         sleep=sleep,
         random_delay=random_delay,
+        notify_dropped=notify_dropped,
     )
 
 
@@ -50,6 +59,60 @@ def test_global_fifo_keeps_three_pending_and_drops_newest():
         assert tasks[3].result() is False
 
     asyncio.run(scenario())
+
+
+def test_queue_full_notifies_once_per_burst():
+    notified = []
+    coordinator = make_coordinator(notify_dropped=notified.append)
+    events = [FakeEvent(f"event-{index}") for index in range(5)]
+
+    async def scenario():
+        assert await coordinator.admit_wakeup(events[0])
+        tasks = [
+            asyncio.create_task(coordinator.admit_wakeup(event))
+            for event in events[1:]
+        ]
+        await asyncio.sleep(0)
+        assert events[4].stopped
+        assert not tasks[0].done()
+        assert tasks[3].done() and tasks[3].result() is False
+
+    asyncio.run(scenario())
+    assert notified == [events[4]]
+
+
+def test_queue_full_notify_resets_after_slot_frees():
+    notified = []
+    coordinator = make_coordinator(notify_dropped=notified.append)
+    events = [FakeEvent(f"event-{index}") for index in range(5)]
+    extra = FakeEvent("extra")
+
+    async def scenario():
+        assert await coordinator.admit_wakeup(events[0])
+        tasks = [
+            asyncio.create_task(coordinator.admit_wakeup(event))
+            for event in events[1:]
+        ]
+        await asyncio.sleep(0)
+        assert events[4].stopped
+
+        coordinator.finish_active(events[0])
+        assert await tasks[0]
+
+        queued = asyncio.create_task(coordinator.admit_wakeup(extra))
+        await asyncio.sleep(0)
+        assert not queued.done()
+
+        dropped = asyncio.create_task(
+            coordinator.admit_wakeup(FakeEvent("dropped-again"))
+        )
+        await asyncio.sleep(0)
+        assert dropped.done() and dropped.result() is False
+
+    asyncio.run(scenario())
+    assert len(notified) == 2
+    assert notified[0] is events[4]
+    assert notified[1].name == "dropped-again"
 
 
 def test_global_fifo_promotes_oldest_event_across_origins():
@@ -142,9 +205,36 @@ def test_completion_waits_for_mechanical_interval_before_next_wakeup():
         queued_task = asyncio.create_task(coordinator.admit_wakeup(queued))
         await asyncio.sleep(0)
 
-        coordinator.finish_active(active)
+        coordinator.finish_active(active, apply_cooldown=True)
         assert await queued_task
         assert delays == [1.8]
+
+    asyncio.run(scenario())
+
+
+def test_completion_without_cooldown_uses_only_mechanical_interval():
+    async def scenario():
+        delays = []
+
+        async def record_sleep(delay):
+            delays.append(delay)
+
+        coordinator = make_coordinator(
+            gate_seconds=1.8,
+            delay=(1.0, 2.0),
+            random_delay=lambda _minimum, _maximum: 1.25,
+            sleep=record_sleep,
+        )
+        active = FakeEvent("active")
+        queued = FakeEvent("queued")
+
+        assert await coordinator.admit_wakeup(active)
+        queued_task = asyncio.create_task(coordinator.admit_wakeup(queued))
+        await asyncio.sleep(0)
+
+        coordinator.finish_active(active, apply_cooldown=False)
+        assert await queued_task
+        assert delays == [1.25]
 
     asyncio.run(scenario())
 

@@ -19,15 +19,22 @@ def combine_console_text(texts: Iterable[str]) -> str:
 
 _SENTENCE_SPLIT = re.compile("(?<=[\u3002\uFF01\uFF1F])\\s*")
 SEGMENT_THRESHOLD = 150
+SEGMENT_MIN_CHARS_DEFAULT = 80
+SEGMENT_MIN_CHARS_FLOOR = 20
+SEGMENT_MIN_CHARS_CAP = 500
 MAX_LAYOUT_CHARS = 100_000
 MAX_MESSAGE_PARTS = 5
 MAX_FOLLOWUP_MESSAGES = MAX_MESSAGE_PARTS - 1
 _CHARS_PER_PARA = 300
 _MAX_PARAS = 5
 _LIST_LINE_RE = re.compile(r"^\s*(?:\d+[\.\u3001\)\uFF09]|[\u2460-\u2469]|[-*])\s")
+_CN_ORDINAL_LINE_RE = re.compile(
+    r"^\s*第[一二三四五六七八九十百\d]+步?[，,、]\s*"
+)
 _DEDUP_TOKEN_RE = re.compile(r"[\u4e00-\u9fff]+|[A-Za-z0-9_]+")
 _MENTION_PREFIX_RE = re.compile(r"^@.+?\s+")
 _QUOTED_ENTITY_RE = re.compile(r"\u300a([^\u300b]{1,40})\u300b")
+_DEDUP_MIN_FUZZY_KEY_LEN = 12
 _DEDUP_NOISE_PHRASE_RE = re.compile(
     r"(?:\u4e3a\u4e86|\u5e2e\u4f60|\u6211(?:\u8fd9\u5c31|\u5148|\u9700\u8981\u5148|\u9700\u8981|\u4f1a|\u6765|\u53bb)|"
     r"\u6211\u4eec(?:\u5148|\u9700\u8981)|\u4e00\u4e0b|\u770b\u4e00\u4e0b|\u786e\u8ba4\u4e00\u4e0b|"
@@ -88,11 +95,20 @@ def _get_llm_timeout_seconds(get_config) -> float:
     return min(timeout, 60.0)
 
 
+def _get_segment_min_chars(get_config) -> int:
+    """Minimum reply length that should be considered for segmentation."""
+    try:
+        value = int(get_config("segment_min_chars", SEGMENT_MIN_CHARS_DEFAULT))
+    except (TypeError, ValueError):
+        value = SEGMENT_MIN_CHARS_DEFAULT
+    return max(SEGMENT_MIN_CHARS_FLOOR, min(value, SEGMENT_MIN_CHARS_CAP))
+
+
 async def try_llm_segment(text: str, context, get_config) -> str | None:
     if not get_config("enable_llm_segment", False):
         return None
     provider_id = get_config("llm_provider_id", "")
-    if not provider_id or len(text) <= SEGMENT_THRESHOLD:
+    if not provider_id or len(text) <= _get_segment_min_chars(get_config):
         return None
     try:
         logger.info("[LLM 分段] 请求 provider=%s", provider_id)
@@ -232,21 +248,64 @@ def _split_dense_entries(text: str) -> str:
     return _DENSE_ENTRY_BREAK_RE.sub("\n", text)
 
 
+def _split_list_items(lines: list[str], item_starts: set[int]) -> str:
+    """Turn consecutive list lines into blank-line-separated paragraphs."""
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if index in item_starts:
+            if current:
+                paragraphs.append("\n".join(current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        paragraphs.append("\n".join(current))
+    if len(paragraphs) >= 2 and paragraphs[0].rstrip().endswith(("\uFF1A", ":")):
+        paragraphs[0] = paragraphs[0] + "\n" + paragraphs[1]
+        paragraphs.pop(1)
+    return "\n\n".join(paragraphs)
+
+
+def _segment_special_formats(text: str) -> str | None:
+    """Split clearly structured content (lists, dense entries) without LLM.
+
+    Returns ``None`` when no recognizable format is present so the caller can
+    continue with style optimization / LLM segmentation / rule fallback.
+    """
+    if not text or "\n" not in text:
+        return None
+    lines = text.split("\n")
+    item_starts = {
+        index
+        for index, line in enumerate(lines)
+        if _LIST_LINE_RE.match(line) or _CN_ORDINAL_LINE_RE.match(line)
+    }
+    if len(item_starts) >= 2:
+        return _split_list_items(lines, item_starts)
+    dense = _split_dense_entries(text)
+    return dense if dense != text else None
+
+
 async def apply_segmentation_and_style(text: str, context, get_config) -> str:
     if not text.strip():
         return text
     if len(text) > MAX_LAYOUT_CHARS:
         logger.warning("[排版] 文本过长，跳过 LLM 和复杂排版：%d 字符", len(text))
         return text
-    result = await try_llm_style_optimize(text, context, get_config)
-    if result:
-        return _merge_orphan_colons(result)
-    if len(text) <= SEGMENT_THRESHOLD:
-        return text
-    result = await try_llm_segment(text, context, get_config)
-    if result:
-        return _merge_orphan_colons(result)
-    return _segment_text(text)
+    formatted = _segment_special_formats(text)
+    if formatted is not None:
+        return formatted
+    styled = await try_llm_style_optimize(text, context, get_config)
+    base = styled or text
+    if len(base) <= _get_segment_min_chars(get_config):
+        return _merge_orphan_colons(base) if styled else base
+    segmented = await try_llm_segment(base, context, get_config)
+    if segmented:
+        return _merge_orphan_colons(segmented)
+    return _segment_text(base)
 
 
 def prepare_multi_message_parts(text: str) -> list[str]:
@@ -323,14 +382,19 @@ def _is_near_duplicate(left: str, left_key: str, right: str, right_key: str) -> 
     if left_key == right_key:
         return True
     shorter, longer = sorted((left_key, right_key), key=len)
-    if len(shorter) >= 12 and shorter in longer:
+    if len(shorter) >= _DEDUP_MIN_FUZZY_KEY_LEN and shorter in longer:
         return True
     similarity = SequenceMatcher(None, left_key, right_key).ratio()
-    if similarity >= 0.72:
-        return True
-    if similarity >= 0.58 and _PROCESS_MARKER_RE.search(left) and _PROCESS_MARKER_RE.search(right):
-        return True
-    return False
+    if similarity < 0.58:
+        return False
+    # Fuzzy collapse is reserved for long tool-process narration pairs; a bare
+    # similarity match would merge distinct structured paragraphs such as
+    # numbered list items that share a prefix or suffix.
+    return (
+        len(shorter) >= _DEDUP_MIN_FUZZY_KEY_LEN
+        and _PROCESS_MARKER_RE.search(left)
+        and _PROCESS_MARKER_RE.search(right)
+    )
 
 
 def _paragraph_score(text: str) -> tuple[int, int]:

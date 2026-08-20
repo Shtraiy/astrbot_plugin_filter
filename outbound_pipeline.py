@@ -53,6 +53,7 @@ class OutboundTextPipeline:
         event: AstrMessageEvent,
         *,
         strict_guard: bool = False,
+        skip_llm_layout: bool = False,
     ) -> ProcessedText:
         original = text or ""
         value = original
@@ -68,14 +69,15 @@ class OutboundTextPipeline:
         if self.get_config("enable_de_ai_flavor", True):
             value = self._apply("去除 AI 味", de_ai_flavor, value, stats)
 
-        value = await self._apply_async(
-            "分段与文风优化",
-            self.segmentation_and_style,
-            value,
-            self.context,
-            self.get_config,
-            stats=stats,
-        )
+        if not skip_llm_layout:
+            value = await self._apply_async(
+                "分段与文风优化",
+                self.segmentation_and_style,
+                value,
+                self.context,
+                self.get_config,
+                stats=stats,
+            )
         value = self._apply("清理 Markdown", strip_markdown, value, stats)
         value = self._apply("再次过滤敏感信息", filter_sensitive, value, stats)
 

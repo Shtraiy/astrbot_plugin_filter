@@ -10,6 +10,7 @@ import pytest
 
 from segmentation import (
     _merge_orphan_colons,
+    _segment_special_formats,
     _split_dense_entries,
     _split_long_para,
     _segment_text,
@@ -124,6 +125,180 @@ def test_llm_segmentation_rejects_non_formatting_changes():
     )
 
     assert result is None
+
+
+def test_llm_segment_runs_for_replies_below_old_150_threshold():
+    calls = []
+
+    class FakeContext:
+        async def llm_generate(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(completion_text=segmented)
+
+    text = "第一点结论，这是回复的核心内容。第二点结论，这是回复的补充内容。"
+    segmented = text.replace(
+        "第二点结论，",
+        "\n\n第二点结论，",
+        1,
+    )
+    config = {
+        "enable_llm_segment": True,
+        "llm_provider_id": "test-provider",
+        "segment_min_chars": 25,
+    }
+
+    result = asyncio.run(
+        try_llm_segment(
+            text,
+            FakeContext(),
+            lambda key, default: config.get(key, default),
+        )
+    )
+
+    assert calls
+    assert result == segmented
+
+
+def test_segmentation_runs_even_when_style_succeeds():
+    calls = []
+
+    class FakeContext:
+        async def llm_generate(self, **kwargs):
+            calls.append(kwargs["prompt"])
+            if "<untrusted_original>" in kwargs["prompt"]:
+                return SimpleNamespace(completion_text=text)
+            return SimpleNamespace(completion_text=segmented)
+
+    text = (
+        "第一点结论，这是回复的核心内容。"
+        "第二点结论，这是回复的补充内容。"
+        "第三点结论，这是回复的额外说明。"
+    )
+    segmented = text.replace(
+        "第二点结论，",
+        "\n\n第二点结论，",
+        1,
+    )
+    config = {
+        "enable_llm_style": True,
+        "enable_llm_segment": True,
+        "llm_provider_id": "test-provider",
+        "segment_min_chars": 25,
+    }
+
+    result = asyncio.run(
+        apply_segmentation_and_style(
+            text,
+            FakeContext(),
+            lambda key, default: config.get(key, default),
+        )
+    )
+
+    assert "\n\n" in result
+    assert calls
+
+
+def test_llm_segment_skips_replies_below_configured_minimum():
+    calls = []
+
+    class FakeContext:
+        async def llm_generate(self, **kwargs):
+            calls.append(kwargs)
+
+    config = {
+        "enable_llm_segment": True,
+        "llm_provider_id": "test-provider",
+        "segment_min_chars": 25,
+    }
+
+    result = asyncio.run(
+        try_llm_segment(
+            "好的。",
+            FakeContext(),
+            lambda key, default: config.get(key, default),
+        )
+    )
+
+    assert calls == []
+    assert result is None
+
+
+def test_mechanical_segmentation_splits_numbered_list():
+    text = "1. 安装依赖\n2. 配置环境\n3. 启动服务"
+
+    result = _segment_special_formats(text)
+
+    assert result == "1. 安装依赖\n\n2. 配置环境\n\n3. 启动服务"
+
+
+def test_mechanical_segmentation_splits_bullet_list():
+    text = "- 苹果\n- 香蕉\n- 樱桃"
+
+    result = _segment_special_formats(text)
+
+    assert result == "- 苹果\n\n- 香蕉\n\n- 樱桃"
+
+
+def test_mechanical_segmentation_splits_chinese_ordinals():
+    text = "第一步，安装依赖。\n第二步，配置环境。\n第三步，启动服务。"
+
+    result = _segment_special_formats(text)
+
+    assert result == (
+        "第一步，安装依赖。\n\n第二步，配置环境。\n\n第三步，启动服务。"
+    )
+
+
+def test_mechanical_segmentation_keeps_continuation_with_item():
+    text = "1. 安装依赖\n   需要 Python 3.10 以上\n2. 配置环境"
+
+    result = _segment_special_formats(text)
+
+    assert result == (
+        "1. 安装依赖\n   需要 Python 3.10 以上\n\n2. 配置环境"
+    )
+
+
+def test_mechanical_segmentation_returns_none_for_prose():
+    text = "这是一段普通的连续叙述，没有任何列表结构，不应该被机械分段处理。"
+
+    assert _segment_special_formats(text) is None
+
+
+def test_mechanical_segmentation_merges_leading_colon_heading():
+    text = "安装步骤：\n1. 安装依赖\n2. 配置环境\n3. 启动服务"
+
+    result = _segment_special_formats(text)
+
+    assert result == (
+        "安装步骤：\n1. 安装依赖\n\n2. 配置环境\n\n3. 启动服务"
+    )
+
+
+def test_mechanical_segmentation_runs_without_llm():
+    calls = []
+
+    class FakeContext:
+        async def llm_generate(self, **kwargs):
+            calls.append(kwargs)
+
+    config = {
+        "enable_llm_style": True,
+        "enable_llm_segment": True,
+        "llm_provider_id": "test-provider",
+        "segment_min_chars": 80,
+    }
+
+    result = asyncio.run(
+        apply_segmentation_and_style(
+            "1. 安装依赖\n2. 配置环境\n3. 启动服务",
+            FakeContext(),
+            lambda key, default: config.get(key, default),
+        )
+    )
+
+    assert calls == []
+    assert result == "1. 安装依赖\n\n2. 配置环境\n\n3. 启动服务"
 
 
 # ============================================================

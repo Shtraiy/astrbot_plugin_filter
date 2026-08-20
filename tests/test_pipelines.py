@@ -224,6 +224,20 @@ class TestFilterSensitive:
         text = "请记得修改密码后重启服务"
         assert filter_sensitive(text) == text
 
+    def test_keeps_prose_mentioning_system_terms(self):
+        samples = [
+            "2. 配置环境变量",
+            "请检查配置文件后重试。",
+            "这一步需要配置数据库连接。",
+            "先查看进程列表。",
+        ]
+        for sample in samples:
+            assert filter_sensitive(sample) == sample
+
+    def test_removes_system_info_key_value_disclosure(self):
+        assert "配置文件" not in filter_sensitive("配置文件：/etc/nginx/nginx.conf")
+        assert "环境变量" not in filter_sensitive("环境变量：SECRET_KEY=abc123")
+
     def test_redacts_assigned_chinese_password(self):
         result = filter_sensitive("密码：12345678")
         assert "12345678" not in result

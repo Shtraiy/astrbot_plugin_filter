@@ -27,7 +27,6 @@ from .segmentation import (
     prepare_multi_message_parts,
 )
 from .outbound_pipeline import OutboundTextPipeline
-from .private_companion_adapter import PrivateCompanionAdapter
 from .reply_coordinator import GateState as _GateState
 from .reply_coordinator import ReplyCoordinator, ReplySession
 
@@ -58,9 +57,6 @@ class LanguageLogicOptimizer(Star):
         self._pending_send: tuple[str, asyncio.Lock, AstrMessageEvent] | None = None
         self._pending_sends: dict[str, tuple[str, asyncio.Lock, AstrMessageEvent]] = {}
         self._onboarding_states: dict[str, _OnboardingState] = {}
-        self._private_companion_adapter = PrivateCompanionAdapter(
-            track_task=self._track_task,
-        )
         self._reply_coordinator = self._build_reply_coordinator()
         self._message_dispatcher = MessageDispatcher(
             self.context,
@@ -72,9 +68,7 @@ class LanguageLogicOptimizer(Star):
             get_gate_seconds=self._get_gate_seconds,
             get_gate_ttl_seconds=self._get_gate_ttl_seconds,
             event_is_wake_up=self._event_is_wake_up,
-            is_proactive_event=self._is_proactive_event,
-            schedule_cancel=self._schedule_private_companion_cancel,
-            proactive_identity=self._get_private_companion_adapter().proactive_request_identity,
+            notify_dropped=self._notify_wakeup_dropped,
             get_wakeup_interval=self._get_wakeup_interval,
             gates=self._gates,
             reply_locks=self._reply_locks,
@@ -99,13 +93,6 @@ class LanguageLogicOptimizer(Star):
             dispatcher = MessageDispatcher(self.context, self._get_reply_coordinator())
             self._message_dispatcher = dispatcher
         return dispatcher
-
-    def _get_private_companion_adapter(self) -> PrivateCompanionAdapter:
-        adapter = getattr(self, "_private_companion_adapter", None)
-        if adapter is None:
-            adapter = PrivateCompanionAdapter(track_task=self._track_task)
-            self._private_companion_adapter = adapter
-        return adapter
 
     @_event_filter.on_waiting_llm_request()
     async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
@@ -190,6 +177,7 @@ class LanguageLogicOptimizer(Star):
                     text,
                     event,
                     strict_guard=strict_guard,
+                    skip_llm_layout=True,
                 )
                 for name, count in processed.stats.items():
                     pipeline_stats[name] = pipeline_stats.get(name, 0) + count
@@ -375,28 +363,8 @@ class LanguageLogicOptimizer(Star):
                 return True
         return bool(checker) if checker is not None else True
 
-    def _mark_proactive_gate_superseded(self, event: AstrMessageEvent) -> None:
-        self._get_reply_coordinator().mark_user_priority(event)
-
-    def _discard_superseded_proactive_result(self, event: AstrMessageEvent) -> bool:
-        return self._get_reply_coordinator().discard_superseded_result(event)
-
-    def _claim_or_stop_wake_up(self, event: AstrMessageEvent) -> bool:
-        return self._get_reply_coordinator().claim_wakeup(event)
-
-    def _gate_is_active(self, event: AstrMessageEvent | None = None) -> bool:
-        return self._get_reply_coordinator().gate_is_active(event)
-
     def _release_gate(self, owner_event: AstrMessageEvent, apply_cooldown: bool = False) -> None:
         self._get_reply_coordinator().release_gate(owner_event, apply_cooldown)
-
-    @classmethod
-    def _events_correlate(
-        cls,
-        owner: AstrMessageEvent | None,
-        candidate: AstrMessageEvent | None,
-    ) -> bool:
-        return ReplyCoordinator.events_correlate(owner, candidate)
 
     def _finish_reply(
         self,
@@ -408,14 +376,24 @@ class LanguageLogicOptimizer(Star):
         session = ReplySession(reply_key, owner_event, reply_lock)
         self._get_reply_coordinator().release(session, apply_cooldown=apply_cooldown)
 
-    def _is_proactive_event(self, event: AstrMessageEvent | None) -> bool:
-        return self._get_private_companion_adapter().is_proactive_event(event)
-
-    def _schedule_private_companion_cancel(self, owner_event: AstrMessageEvent) -> None:
-        self._get_private_companion_adapter().schedule_cancel(owner_event)
-
-    async def _cancel_private_companion_proactive(self, session_id: str, token: str) -> None:
-        await self._get_private_companion_adapter().cancel(session_id, token)
+    def _notify_wakeup_dropped(self, event: AstrMessageEvent) -> None:
+        notice = self._get_config("queue_full_notice", "队列繁忙，请稍后再试。")
+        if not notice:
+            return
+        origin = getattr(event, "unified_msg_origin", None)
+        if not origin:
+            return
+        try:
+            task = asyncio.create_task(
+                self.context.send_message(
+                    origin,
+                    MessageChain().message(str(notice)),
+                )
+            )
+        except Exception:
+            logger.warning("[语言优化] 队列满提示发送失败", exc_info=True)
+            return
+        self._track_task(task)
 
     def _get_guard_terms(self) -> list[str]:
         return parse_terms(self._get_config("content_guard_block_terms", ""))
