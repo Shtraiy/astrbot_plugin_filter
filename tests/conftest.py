@@ -61,10 +61,28 @@ def _install_astrbot_stubs() -> None:
     class AstrMessageEvent:
         pass
 
+    class EventMessageType:
+        ALL = "all"
+        PRIVATE_MESSAGE = "private"
+        GROUP_MESSAGE = "group"
+
     class Filter:
-        def __getattr__(self, _name):
+        _DECORATORS = {
+            "event_message_type",
+            "on_waiting_llm_request",
+            "on_llm_request",
+            "on_decorating_result",
+            "after_message_sent",
+        }
+
+        def __getattr__(self, name):
+            if name not in self._DECORATORS:
+                raise AttributeError(
+                    f"astrbot.api.event.filter has no attribute {name!r}"
+                )
             return lambda *args, **kwargs: (lambda function: function)
 
+    Filter.EventMessageType = EventMessageType
     event_mod.AstrMessageEvent = AstrMessageEvent
     event_mod.filter = Filter()
 

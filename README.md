@@ -2,7 +2,7 @@
 
 # AstrBot 回复优化大师
 
-[![version](https://img.shields.io/badge/version-v2.11.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v2.11.1-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -197,6 +197,10 @@ astrbot_plugin_filter/
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
 
 ## 📝 更新日志
+
+### 2.11.1
+
+- 修复：消息合并监听改用 `filter.event_message_type(filter.EventMessageType.ALL)`，兼容 AstrBot 4.16+（`filter.on_message` 在该系列版本中不存在，会导致插件加载失败）。
 
 ### 2.11.0
 

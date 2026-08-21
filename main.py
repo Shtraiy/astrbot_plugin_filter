@@ -102,7 +102,7 @@ class LanguageLogicOptimizer(Star):
             self._message_merger = merger
         return merger
 
-    @_event_filter.on_message()
+    @_event_filter.event_message_type(_event_filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent) -> None:
         """Capture same-user follow-up text while a merge window is open."""
         if not self._get_config("enable_message_merge", True):
