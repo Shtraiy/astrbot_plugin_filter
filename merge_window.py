@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from astrbot.api.message_components import Plain
+from astrbot.api.message_components import File, Image, Plain
 
 
 MAX_MERGE_STATES = 4096
@@ -18,6 +18,7 @@ class _MergeState:
     owner_event: Any
     phase: str
     pending_text: str
+    pending_media: list[Any] = field(default_factory=list)
     captured_events: set[Any] = field(default_factory=set)
     captured_count: int = 0
     pipeline_task: Any = None
@@ -113,12 +114,19 @@ class MergeWindowManager:
             return False
         if state.owner_event is event or event in state.captured_events:
             return False
-        text = self._plain_text(event)
-        if text is None or not self._mergeable(text):
+        payload = self._extract_merge_payload(event)
+        if payload is None:
             return False
-        if not self._within_limits(state, text):
+        text, media = payload
+        if text and not self._mergeable(text):
             return False
-        state.pending_text = self.join_text(state.pending_text, text)
+        if not text and not media:
+            return False
+        if not self._within_limits(state, text, media):
+            return False
+        if text:
+            state.pending_text = self.join_text(state.pending_text, text)
+        state.pending_media.extend(media)
         state.captured_events.add(event)
         state.captured_count += 1
         return True
@@ -132,12 +140,14 @@ class MergeWindowManager:
         if state is None or state.owner_event is not event:
             return str(getattr(event, "message_str", "") or "")
         merged = state.pending_text
+        self.attach_media(event, state.pending_media)
+        state.pending_media = []
         state.phase = "planning"
         state.captured_events.clear()
         return merged
 
-    def take_planning(self, event: Any) -> tuple[Any, str, Any] | None:
-        """Consume the planning state; return (old_event, text, pipeline_task)."""
+    def take_planning(self, event: Any) -> tuple[Any, str, list[Any], Any] | None:
+        """Consume the planning state; return (old_event, text, media, pipeline_task)."""
         key = self.user_key(event)
         if key is None:
             return None
@@ -147,7 +157,13 @@ class MergeWindowManager:
         self._states.pop(key, None)
         if self._event_stopped(state.owner_event):
             return None
-        return (state.owner_event, state.pending_text, state.pipeline_task)
+        media = self._owner_media(state.owner_event)
+        return (
+            state.owner_event,
+            state.pending_text,
+            media,
+            state.pipeline_task,
+        )
 
     def clear_owner(self, event: Any) -> None:
         """Drop the state once the owner's reply is decorated or sent."""
@@ -158,22 +174,56 @@ class MergeWindowManager:
         if state is not None and state.owner_event is event:
             self._states.pop(key, None)
 
-    @staticmethod
-    def _plain_text(event: Any) -> str | None:
+    def _extract_merge_payload(self, event: Any) -> tuple[str, list[Any]] | None:
+        """Return (text, media_components) when the message is mergeable."""
         getter = getattr(event, "get_messages", None)
         if callable(getter):
             try:
                 chain = list(getter())
             except Exception:
                 chain = []
-            if chain:
-                for comp in chain:
-                    if not isinstance(comp, Plain):
-                        return None
-                return "".join(getattr(c, "text", "") or "" for c in chain).strip() or None
-            return None
+            if not chain:
+                return None
+            text_parts: list[str] = []
+            media: list[Any] = []
+            for comp in chain:
+                if isinstance(comp, Plain):
+                    text_parts.append(getattr(comp, "text", "") or "")
+                elif self._is_mergeable_media(comp):
+                    media.append(comp)
+                else:
+                    return None
+            text = "".join(text_parts).strip()
+            if not text and not media:
+                return None
+            return (text, media)
         text = str(getattr(event, "message_str", "") or "").strip()
-        return text or None
+        return (text, []) if text else None
+
+    def _is_mergeable_media(self, comp: Any) -> bool:
+        if not self._get_config("merge_include_media", True):
+            return False
+        return isinstance(comp, (Image, File))
+
+    @staticmethod
+    def attach_media(event: Any, media: list[Any]) -> None:
+        if not media:
+            return
+        chain = getattr(getattr(event, "message_obj", None), "message", None)
+        if chain is None:
+            return
+        chain.extend(media)
+
+    @classmethod
+    def _owner_media(cls, event: Any) -> list[Any]:
+        chain = getattr(getattr(event, "message_obj", None), "message", None)
+        if chain is None:
+            return []
+        return [
+            comp
+            for comp in chain
+            if isinstance(comp, (Image, File))
+        ]
 
     def _mergeable(self, text: str) -> bool:
         raw = self._get_config("merge_ignore_prefixes", "/,!")
@@ -183,7 +233,12 @@ class MergeWindowManager:
                 return False
         return True
 
-    def _within_limits(self, state: _MergeState, text: str) -> bool:
+    def _within_limits(
+        self,
+        state: _MergeState,
+        text: str,
+        media: list[Any],
+    ) -> bool:
         max_messages = self._max_messages()
         if max_messages > 0 and state.captured_count >= max_messages:
             return False

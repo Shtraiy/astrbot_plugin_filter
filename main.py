@@ -128,8 +128,9 @@ class LanguageLogicOptimizer(Star):
                 return
             pending = merger.take_planning(event)
             if pending is not None:
-                old_event, earlier_text, pipeline_task = pending
+                old_event, earlier_text, earlier_media, pipeline_task = pending
                 if self._get_reply_coordinator().supersede_active_event(old_event):
+                    merger.attach_media(event, earlier_media)
                     if (
                         self._get_config("merge_task_cancel", False)
                         and pipeline_task is not None

@@ -1,4 +1,7 @@
 import asyncio
+from types import SimpleNamespace
+
+from astrbot.api.message_components import Image, Plain
 
 from main import LanguageLogicOptimizer
 
@@ -9,7 +12,16 @@ class FakeContext:
 
 
 class FakeEvent:
-    def __init__(self, sender, origin, text="", *, wake=True, request_id=None):
+    def __init__(
+        self,
+        sender,
+        origin,
+        text="",
+        *,
+        wake=True,
+        request_id=None,
+        chain=None,
+    ):
         self.sender = sender
         self.unified_msg_origin = origin
         self.message_str = text
@@ -18,14 +30,14 @@ class FakeEvent:
         self.stopped = False
         self._result = None
         self._extras = {}
+        self._chain = chain if chain is not None else ([Plain(text)] if text else [])
+        self.message_obj = SimpleNamespace(message=self._chain)
 
     def get_sender_id(self):
         return self.sender
 
     def get_messages(self):
-        from astrbot.api.message_components import Plain
-
-        return [Plain(self.message_str)] if self.message_str else []
+        return self.message_obj.message
 
     def is_wake_up(self):
         return self._wake
@@ -166,3 +178,26 @@ def test_merged_text_still_goes_through_content_guard():
     first = asyncio.run(run())
 
     assert first.stopped
+
+
+def test_image_followup_merged_into_owner_chain():
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "group:1", "看看这张图", wake=True)
+    img = Image("http://example.com/a.png")
+    second = FakeEvent("u1", "group:1", chain=[img])
+
+    async def run():
+        first_task = asyncio.create_task(
+            optimizer.on_waiting_llm_request(first)
+        )
+        await asyncio.sleep(0.05)
+        await optimizer.on_message(second)
+        await first_task
+        return first
+
+    first = asyncio.run(run())
+
+    assert any(
+        getattr(comp, "url", "") == "http://example.com/a.png"
+        for comp in first.message_obj.message
+    )

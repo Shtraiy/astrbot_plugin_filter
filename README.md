@@ -2,7 +2,7 @@
 
 # AstrBot 语言逻辑优化大师
 
-[![version](https://img.shields.io/badge/version-v2.8.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v2.9.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -29,7 +29,7 @@ The cleanup stages are intentionally retained for compatibility.
 - 删除工具调用过程中的内部叙述，并将工具函数名转换为更自然的中文描述。
 - 使用规则或 LLM 优化 AI 味表达。
 - 支持 LLM 智能分段，失败时自动降级到规则分段；编号/项目符号/中文序数等特殊格式直接机械分段，不调用 LLM。
-- 收到唤醒后开启短窗口（默认 6 秒），把同一用户继续发送的分段消息合并成一次回复，避免"表情包"和"可爱的表情包"被拆成两次割裂的回复。
+- 收到唤醒后开启短窗口（默认 6 秒），把同一用户继续发送的分段消息（含图片/文件）合并成一次回复，避免"表情包"和"可爱的表情包"被拆成两次割裂的回复。
 - 将常见 Markdown 语法转换为适合 QQ 展示的纯文本。
 - 将分段结果按多条消息发送，并合并重复段落及工具流程叙述中高度相似的段落。
 - 同一群聊内按顺序发送不同用户的完整回复，避免消息交错。
@@ -107,6 +107,7 @@ pip install -r requirements.txt
 | `merge_max_messages` | int | `5` | 单个窗口最多合并的消息条数；`0` 不限制 |
 | `merge_max_chars` | int | `2000` | 合并文本最大字符数；`0` 不限制 |
 | `merge_ignore_prefixes` | string | `/,!` | 不参与合并的消息前缀，逗号分隔 |
+| `merge_include_media` | bool | `true` | 是否把窗口内同用户发送的图片/文件一并合并进同一次回复 |
 | `merge_task_cancel` | bool | `false` | 规划中收到同用户新消息时尝试真正取消旧请求任务；依赖 AstrBot 4.25+，旧版本保持关闭 |
 | `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
 | `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
@@ -171,7 +172,7 @@ astrbot_plugin_filter/
 
 ### 分段消息合并没有生效
 
-合并窗口默认开启（`enable_message_merge`）。它只对有人类发送者（sender）的唤醒消息生效，按"会话 + 用户 ID"隔离；窗口内同一用户的纯文本消息会被合并，图片/文件/引用/转发消息和以 `merge_ignore_prefixes`（默认 `/`、`!`）开头的消息不参与合并。每条消息都会因窗口等待最多 `merge_window_seconds` 秒（默认 6 秒）的延迟。
+合并窗口默认开启（`enable_message_merge`）。它只对有人类发送者（sender）的唤醒消息生效，按"会话 + 用户 ID"隔离；窗口内同一用户的纯文本会被合并，图片/文件消息在 `merge_include_media`（默认开启）下也会一并合并，引用/转发等其它类型以及以 `merge_ignore_prefixes`（默认 `/`、`!`）开头的消息不参与合并。每条消息都会因窗口等待最多 `merge_window_seconds` 秒（默认 6 秒）的延迟。
 
 ### 群聊内容防护
 
@@ -194,6 +195,10 @@ astrbot_plugin_filter/
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
 
 ## 📝 更新日志
+
+### 2.9.0
+
+- 合并窗口支持图片/文件：窗口内同一用户发送的图片和文件会随文本一并进入同一次 LLM 请求（新增 `merge_include_media`，默认开启）；引用/转发等其它类型仍不参与合并。
 
 ### 2.8.0
 

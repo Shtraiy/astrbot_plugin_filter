@@ -28,6 +28,18 @@ def _install_astrbot_stubs() -> None:
 
     components_mod.Plain = Plain
 
+    class Image:
+        def __init__(self, url=""):
+            self.url = url
+
+    components_mod.Image = Image
+
+    class File:
+        def __init__(self, name=""):
+            self.name = name
+
+    components_mod.File = File
+
     all_mod = types.ModuleType("astrbot.api.all")
 
     class MessageChain:

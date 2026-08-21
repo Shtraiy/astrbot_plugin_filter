@@ -138,6 +138,12 @@
     "hint": "逗号分隔；以这些前缀开头的后续消息不会被合并（如命令）。",
     "default": "/,!"
   },
+  "merge_include_media": {
+    "description": "是否合并图片/文件消息",
+    "type": "bool",
+    "hint": "开启后，窗口内同一用户发送的图片和文件会随文本一并合并进同一次 LLM 请求；引用/转发等其它类型仍不参与合并。",
+    "default": true
+  },
   "merge_task_cancel": {
     "description": "合并时取消旧 pipeline 任务",
     "type": "bool",

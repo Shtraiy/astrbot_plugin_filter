@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from astrbot.api.message_components import Plain
+from astrbot.api.message_components import File, Image, Plain
 
 from _astrbot_plugin_filter_test.merge_window import MergeWindowManager
 
@@ -12,6 +12,7 @@ class FakeEvent:
         self.message_str = text
         self._wake = wake
         self._chain = chain if chain is not None else ([Plain(text)] if text else [])
+        self.message_obj = SimpleNamespace(message=self._chain)
         self.stopped = False
 
     def get_sender_id(self):
@@ -141,7 +142,7 @@ def test_finalize_moves_to_planning_and_take_consumes():
     result = manager.take_planning(follow)
 
     assert result is not None
-    old_event, text, _task = result
+    old_event, text, _media, _task = result
     assert old_event is owner
     assert text == "第一段"
     assert manager.take_planning(follow) is None
@@ -168,3 +169,76 @@ def test_start_window_skips_events_without_sender():
 def test_join_text_strips_leading_mention():
     assert MergeWindowManager.join_text("第一段", "@bot 第二段") == "第一段\n第二段"
     assert MergeWindowManager.join_text("", "@bot 第二段") == "第二段"
+
+
+def test_capture_merges_image_followup():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "看看这张图")
+    manager.start_window(owner)
+    img = Image("http://example.com/a.png")
+
+    assert manager.capture(FakeEvent("u1", "group:1", chain=[img]))
+    assert manager.finalize_window(owner) == "看看这张图"
+    assert owner.message_obj.message[-1] is img
+
+
+def test_capture_merges_text_with_image():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+    img = Image("http://example.com/a.png")
+
+    assert manager.capture(
+        FakeEvent("u1", "group:1", chain=[Plain("配图"), img])
+    )
+    assert manager.finalize_window(owner) == "第一段\n配图"
+    assert owner.message_obj.message[-1] is img
+
+
+def test_capture_merges_file_followup():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "看文件")
+    manager.start_window(owner)
+    file_comp = File("doc.pdf")
+
+    assert manager.capture(FakeEvent("u1", "group:1", chain=[file_comp]))
+    assert manager.finalize_window(owner) == "看文件"
+    assert owner.message_obj.message[-1] is file_comp
+
+
+def test_capture_skips_media_when_disabled():
+    manager = make_manager(merge_include_media=False)
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+
+    assert not manager.capture(
+        FakeEvent("u1", "group:1", chain=[Image("http://example.com/a.png")])
+    )
+    assert manager.finalize_window(owner) == "第一段"
+
+
+def test_capture_skips_quoted_media():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+
+    assert not manager.capture(
+        FakeEvent("u1", "group:1", chain=[SimpleNamespace(type="Reply")])
+    )
+    assert manager.finalize_window(owner) == "第一段"
+
+
+def test_take_planning_carries_media():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+    img = Image("http://example.com/a.png")
+    manager.capture(FakeEvent("u1", "group:1", chain=[img]))
+    manager.finalize_window(owner)
+
+    result = manager.take_planning(FakeEvent("u1", "group:1", "第二段"))
+
+    assert result is not None
+    _old_event, text, media, _task = result
+    assert text == "第一段"
+    assert media == [img]
