@@ -151,6 +151,7 @@ astrbot_plugin_filter/
 ├── outbound_pipeline.py # 输出净化管线：清洗/脱敏/去 AI 味/分段/Markdown
 ├── reply_coordinator.py # 全局唤醒队列、回复锁与完成回调
 ├── message_dispatcher.py # 后续分段消息的延迟发送
+├── merge_window.py      # 分段消息合并窗口：同用户短窗口内合并后续消息
 ├── image_renderer.py    # 列表图片渲染
 ├── _conf_schema.json     # AstrBot 配置项定义
 ├── metadata.yaml         # 插件元数据
