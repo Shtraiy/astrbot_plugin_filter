@@ -2,7 +2,7 @@
 
 # AstrBot 回复优化大师
 
-[![version](https://img.shields.io/badge/version-v2.12.2-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v2.13.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -83,12 +83,26 @@ pip install -r requirements.txt
 
 配置入口：`AstrBot 管理面板 -> 插件 -> 回复优化大师 -> 配置`
 
+管理面板只显示常用配置；其余为高级配置（使用默认值即可），如需调整请直接编辑
+`AstrBot/data/config/astrbot_plugin_filter_config.json`。
+
+### 常用配置（管理面板显示）
+
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | ---: | --- |
 | `llm_provider_id` | provider | 空 | LLM 分段和文风优化使用的模型 |
 | `enable_llm_style` | bool | `true` | 每条正常非空回复调用 LLM 润色，保留原意并适量删除八股文；需要配置 `llm_provider_id` |
-| `llm_timeout_seconds` | float | `15.0` | 单次 LLM 润色/分段最多等待时间；超时自动回退，最大 60 秒 |
 | `enable_llm_segment` | bool | `false` | 启用 LLM 语义分段 |
+| `enable_message_merge` | bool | `true` | 启用分段消息合并窗口：把同一用户短窗口内的分段消息合并成一次回复 |
+| `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
+| `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
+| `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
+
+### 高级配置（面板隐藏，默认值即可）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | ---: | --- |
+| `llm_timeout_seconds` | float | `15.0` | 单次 LLM 润色/分段最多等待时间；超时自动回退，最大 60 秒 |
 | `segment_min_chars` | int | `80` | 触发分段的最少字符数；回复低于该值不尝试分段，最小 20 |
 | `enable_de_ai_flavor` | bool | `true` | 启用规则去 AI 味 |
 | `enable_image_render` | bool | `false` | 启用列表图片渲染 |
@@ -103,7 +117,6 @@ pip install -r requirements.txt
 | `wakeup_interval_min` | float | `1.0` | 全局唤醒间隔下限；运行时不会低于 1 秒 |
 | `wakeup_interval_max` | float | `2.0` | 全局唤醒间隔上限；默认在 1～2 秒之间随机等待 |
 | `queue_full_notice` | string | `队列繁忙，请稍后再试。` | 全局唤醒队列满、丢弃最新消息时发送的提示；同一轮丢弃只提示一次，留空则不发送 |
-| `enable_message_merge` | bool | `true` | 启用分段消息合并窗口：把同一用户短窗口内的分段消息合并成一次回复 |
 | `merge_window_seconds` | float | `6.0` | 合并窗口时长；从第一条唤醒消息起等待后续分段，运行时限制在 1~30 秒 |
 | `merge_max_messages` | int | `5` | 单个窗口最多合并的消息条数；`0` 不限制 |
 | `merge_max_chars` | int | `2000` | 合并文本最大字符数；`0` 不限制 |
@@ -114,9 +127,6 @@ pip install -r requirements.txt
 | `protect_user_media_focus` | bool | `true` | 请求上下文清洗总开关：每次请求剔除机器人自己历史消息里的图片/文件，并移除自发表情包描述 |
 | `strip_self_media_from_context` | bool | `true` | 每次请求都从历史 assistant 消息中剔除机器人自己发送的图片/文件组件 |
 | `strip_recent_self_meme_context` | bool | `true` | 每次请求都移除 `<recent_sent_meme>` 等上一轮自发表情包描述注入块；若需要保留以便用户纯文字追问“刚才的表情”，可关闭 |
-| `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
-| `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
-| `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
 | `onboarding_guard_minutes` | float | `30.0` | 新群聊严格防护的持续时间，单位为分钟 |
 | `onboarding_guard_messages` | int | `20` | 新群聊严格防护覆盖的 LLM 请求次数 |
 
@@ -207,6 +217,10 @@ astrbot_plugin_filter/
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
 
 ## 📝 更新日志
+
+### 2.13.0
+
+- 精简插件配置面板：只保留常用配置（LLM 模型、文风/分段开关、消息合并开关、内容防护相关）；其余 27 项标记为 `invisible`，管理面板不再显示，继续使用默认值，可通过 `AstrBot/data/config/astrbot_plugin_filter_config.json` 直接修改。
 
 ### 2.12.2
 

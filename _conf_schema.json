@@ -16,7 +16,8 @@
     "description": "LLM 单次请求超时时间（秒）",
     "type": "float",
     "hint": "文风润色或智能分段单次最多等待的时间；超时会自动回退到原文或规则处理，默认 15 秒，最大 60 秒。",
-    "default": 15.0
+    "default": 15.0,
+    "invisible": true
   },
   "enable_llm_segment": {
     "description": "启用 LLM 智能分段",
@@ -28,85 +29,99 @@
     "description": "触发分段的最少字符数",
     "type": "int",
     "hint": "回复长度超过该值才会尝试 LLM/规则分段；默认 80，最小 20。",
-    "default": 80
+    "default": 80,
+    "invisible": true
   },
   "enable_de_ai_flavor": {
     "description": "启用正则去 AI 味",
     "type": "bool",
     "hint": "清除常见公式化表达，例如“我来整理一下”“以下是”等。",
-    "default": true
+    "default": true,
+    "invisible": true
   },
   "enable_image_render": {
     "description": "启用图片渲染",
     "type": "bool",
     "hint": "检测到结构化列表时自动渲染为图片发送，需要 Pillow。",
-    "default": false
+    "default": false,
+    "invisible": true
   },
   "image_min_list_items": {
     "description": "触发图片渲染的最少列表项数",
     "type": "int",
     "hint": "文本包含不少于此数量的编号列表行时触发图片渲染。",
-    "default": 3
+    "default": 3,
+    "invisible": true
   },
   "image_font_size": {
     "description": "图片字号（px）",
     "type": "int",
     "hint": "渲染图片使用的字体大小。",
-    "default": 22
+    "default": 22,
+    "invisible": true
   },
   "image_max_width": {
     "description": "图片最大宽度（px）",
     "type": "int",
     "hint": "渲染图片的最大宽度，超出会自动换行。",
-    "default": 600
+    "default": 600,
+    "invisible": true
   },
   "multi_message": {
     "description": "多消息逐段发送",
     "type": "bool",
     "hint": "开启后将分段后的文本拆成多条消息。",
-    "default": true
+    "default": true,
+    "invisible": true
   },
   "delay_min": {
     "description": "消息间隔下限（秒）",
     "type": "float",
     "hint": "每条后续消息之间的最小间隔，运行时限制在 2~5 秒。",
-    "default": 2.0
+    "default": 2.0,
+    "invisible": true
   },
   "delay_max": {
     "description": "消息间隔上限（秒）",
     "type": "float",
     "hint": "每条后续消息之间的最大间隔，运行时限制在 2~5 秒。",
-    "default": 5.0
+    "default": 5.0,
+    "invisible": true
   },
   "gate_seconds": {
     "description": "闸门时间（秒）",
     "type": "float",
     "hint": "全局唤醒在最后一条分段消息真正发送完成前始终锁定；发送完成后等待此时间再接受新的唤醒。设置为 0 表示发送完成后立即接受。",
-    "default": 0.0
+    "default": 0.0,
+    "invisible": true
   },
   "gate_ttl_seconds": {
     "description": "闸门最大存活时间（秒）",
     "type": "float",
     "hint": "请求异常中断或回复从未完成时，闸门会在超时后自动释放，避免该来源永久无法唤醒；设置为 0 可禁用自动释放。",
-    "default": 300.0
+    "default": 300.0,
+    "invisible": true
   },
   "wakeup_interval_min": {
     "description": "全局唤醒间隔下限（秒）",
     "type": "float",
     "hint": "上一条完整回复结束后，下一条排队唤醒开始思考前的最小等待时间；运行时不会低于 1 秒。",
-    "default": 1.0
+    "default": 1.0,
+    "invisible": true
   },
   "wakeup_interval_max": {
     "description": "全局唤醒间隔上限（秒）",
     "type": "float",
     "hint": "上一条完整回复结束后，下一条排队唤醒开始思考前的最大等待时间；默认与下限形成 1～2 秒随机间隔。",
-    "default": 2.0
+    "default": 2.0,
+    "invisible": true
   },
   "queue_full_notice": {
     "description": "唤醒队列满时的提示文案",
     "type": "string",
     "hint": "全局队列最多保留 3 条等待中的唤醒，满时丢弃最新消息；填写文案会在丢弃时发送给对应会话，留空则不发送。",
-    "default": "队列繁忙，请稍后再试。"
+    "default": "队列繁忙，请稍后再试。",
+    "invisible": true
   },
   "enable_message_merge": {
     "description": "启用分段消息合并窗口",
@@ -118,61 +133,71 @@
     "description": "合并窗口时长（秒）",
     "type": "float",
     "hint": "从第一条唤醒消息起等待后续分段的时长，运行时限制在 1~30 秒，默认 6 秒。",
-    "default": 6.0
+    "default": 6.0,
+    "invisible": true
   },
   "merge_max_messages": {
     "description": "单个窗口最多合并的消息条数",
     "type": "int",
     "hint": "超过该条数后不再捕获后续消息；设为 0 表示不限制。",
-    "default": 5
+    "default": 5,
+    "invisible": true
   },
   "merge_max_chars": {
     "description": "合并文本最大字符数",
     "type": "int",
     "hint": "累计合并文本超过该字符数后不再捕获；设为 0 表示不限制。",
-    "default": 2000
+    "default": 2000,
+    "invisible": true
   },
   "merge_ignore_prefixes": {
     "description": "不参与合并的消息前缀",
     "type": "string",
     "hint": "逗号分隔；以这些前缀开头的后续消息不会被合并（如命令）。",
-    "default": "/,!"
+    "default": "/,!",
+    "invisible": true
   },
   "merge_include_media": {
     "description": "是否合并图片/文件消息",
     "type": "bool",
     "hint": "开启后，窗口内同一用户发送的图片和文件会随文本一并合并进同一次 LLM 请求；引用/转发等其它类型仍不参与合并。",
-    "default": true
+    "default": true,
+    "invisible": true
   },
   "merge_continuation_ttl": {
     "description": "规划期补充消息的保留时长（秒）",
     "type": "float",
     "hint": "窗口关闭后、回复生成期间收到的同用户无唤醒词补充，会暂存并在该用户下一次唤醒时并入；超过此时长后失效。设为 0 关闭该保留行为。",
-    "default": 120.0
+    "default": 120.0,
+    "invisible": true
   },
   "merge_task_cancel": {
     "description": "合并时取消旧 pipeline 任务",
     "type": "bool",
     "hint": "规划中收到同用户新消息时，尝试真正取消旧请求任务以加速重新回复；依赖 AstrBot 4.25+ 的取消传播，旧版本请保持关闭。",
-    "default": false
+    "default": false,
+    "invisible": true
   },
   "protect_user_media_focus": {
     "description": "启用请求上下文清洗",
     "type": "bool",
     "hint": "开启后，每次请求都会从 LLM 上下文中剔除机器人自己历史消息里的图片/文件，并移除其它插件注入的上一轮自发表情包描述（如 <recent_sent_meme>），避免模型把机器人自己的表情包当成用户刚发的图。",
-    "default": true
+    "default": true,
+    "invisible": true
   },
   "strip_self_media_from_context": {
     "description": "从 LLM 上下文剔除机器人自己的图片/文件",
     "type": "bool",
     "hint": "每次请求都从历史 assistant 消息中移除图片/文件组件，防止模型在纯文字消息（如问候）时仍看到机器人自己发过的表情包而继续回复表情包话题。",
-    "default": true
+    "default": true,
+    "invisible": true
   },
   "strip_recent_self_meme_context": {
     "description": "剔除上一轮自发表情包描述注入",
     "type": "bool",
     "hint": "每次请求都移除 meme_manager 等插件注入的 <recent_sent_meme> 文本块。该文本块会拼进用户消息，模型可能误以为用户刚发送了表情包；若需要保留以便用户纯文字追问“刚才的表情”，可关闭此项。",
-    "default": true
+    "default": true,
+    "invisible": true
   },
   "enable_content_guard": {
     "description": "启用群聊内容防护",
@@ -196,12 +221,14 @@
     "description": "新群聊严格防护时长（分钟）",
     "type": "float",
     "hint": "机器人首次处理该群消息后，在此时间内启用更严格的诱导检测；设置为 0 可关闭时间限制。",
-    "default": 30.0
+    "default": 30.0,
+    "invisible": true
   },
   "onboarding_guard_messages": {
     "description": "新群聊严格防护消息数",
     "type": "int",
     "hint": "新群聊前多少次 LLM 请求启用严格防护；设置为 0 可关闭消息数限制。",
-    "default": 20
+    "default": 20,
+    "invisible": true
   }
 }
