@@ -194,35 +194,39 @@ class LanguageLogicOptimizer(Star):
             self._release_gate(event)
 
     def _clean_media_focus_context(self, event: AstrMessageEvent, req) -> None:
-        """Keep the vision target on the user's own media when they send an image.
+        """Keep the model from re-analyzing the bot's own previously-sent media.
 
-        When the current user message carries media, drop the bot's own
-        outgoing media from the assistant history and remove other plugins'
-        "recently sent self meme" text injection, so the model does not treat
-        the bot's own meme as the image-recognition target.
+        The bot's own outgoing images stay in the conversation history and are
+        visible to multimodal models on every later request, which hijacks
+        replies even for plain-text messages such as a greeting. Always remove
+        media from assistant history; when the current user message carries
+        media, also remove other plugins' "recently sent self meme" text
+        injection so the recognition target stays on the user's own image.
         """
         if not self._get_config("protect_user_media_focus", True):
             return
-        try:
-            if not has_user_media(event):
-                return
-        except Exception:
-            logger.debug("[请求清洗] 检查用户媒体失败", exc_info=True)
+        if req is None:
             return
         removed_media = 0
         removed_meme = 0
         try:
-            if req is not None:
-                if self._get_config("strip_self_media_from_context", True):
-                    removed_media = strip_assistant_media(req)
-                if self._get_config("strip_recent_self_meme_context", True):
-                    removed_meme = strip_recent_self_meme_context(req)
+            if self._get_config("strip_self_media_from_context", True):
+                removed_media = strip_assistant_media(req)
+            try:
+                user_has_media = has_user_media(event)
+            except Exception:
+                user_has_media = False
+            if (
+                user_has_media
+                and self._get_config("strip_recent_self_meme_context", True)
+            ):
+                removed_meme = strip_recent_self_meme_context(req)
         except Exception:
             logger.debug("[请求清洗] 上下文清洗失败", exc_info=True)
             return
         if removed_media or removed_meme:
             logger.info(
-                "[请求清洗] 用户本轮带图，已剔除历史机器人图片/文件=%d、上一轮自发表情包描述=%d",
+                "[请求清洗] 已剔除历史机器人图片/文件=%d、自发表情包描述=%d",
                 removed_media,
                 removed_meme,
             )

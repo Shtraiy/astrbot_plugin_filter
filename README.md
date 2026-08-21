@@ -2,7 +2,7 @@
 
 # AstrBot 回复优化大师
 
-[![version](https://img.shields.io/badge/version-v2.12.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v2.12.1-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -30,7 +30,7 @@ The cleanup stages are intentionally retained for compatibility.
 - 使用规则或 LLM 优化 AI 味表达。
 - 支持 LLM 智能分段，失败时自动降级到规则分段；编号/项目符号/中文序数等特殊格式直接机械分段，不调用 LLM。
 - 收到唤醒后开启短窗口（默认 6 秒），把同一用户继续发送的分段消息（含图片/文件）合并成一次回复，避免"表情包"和"可爱的表情包"被拆成两次割裂的回复。
-- 用户本轮带图时自动锁定识图目标：剔除历史上下文中机器人自己发送的图片/文件，并移除其它插件注入的上一轮自发表情包描述，避免机器人把自己的表情包当成识图对象。
+- 自动剔除 LLM 上下文中机器人自己发送的图片/文件，避免纯文字消息（如问候）也被历史表情包话题带偏；用户本轮带图时还会额外移除其它插件注入的上一轮自发表情包描述，锁定识图目标。
 - 将常见 Markdown 语法转换为适合 QQ 展示的纯文本。
 - 将分段结果按多条消息发送，并合并重复段落及工具流程叙述中高度相似的段落。
 - 同一群聊内按顺序发送不同用户的完整回复，避免消息交错。
@@ -111,9 +111,9 @@ pip install -r requirements.txt
 | `merge_include_media` | bool | `true` | 是否把窗口内同用户发送的图片/文件一并合并进同一次回复 |
 | `merge_continuation_ttl` | float | `120.0` | 规划期收到的无唤醒词补充暂存时长（秒）；该用户下一次唤醒时并入，`0` 关闭 |
 | `merge_task_cancel` | bool | `false` | 规划中收到同用户新消息时尝试真正取消旧请求任务；依赖 AstrBot 4.25+，旧版本保持关闭 |
-| `protect_user_media_focus` | bool | `true` | 用户本轮发送图片/文件时锁定识图目标；总开关，关闭后不再做请求上下文清洗 |
-| `strip_self_media_from_context` | bool | `true` | 用户带图时，从历史 assistant 消息中剔除机器人自己发送的图片/文件组件 |
-| `strip_recent_self_meme_context` | bool | `true` | 用户带图时，移除 `<recent_sent_meme>` 等上一轮自发表情包描述注入块 |
+| `protect_user_media_focus` | bool | `true` | 请求上下文清洗总开关：剔除机器人自己历史消息里的图片/文件，并在用户带图时移除自发表情包描述 |
+| `strip_self_media_from_context` | bool | `true` | 每次请求都从历史 assistant 消息中剔除机器人自己发送的图片/文件组件 |
+| `strip_recent_self_meme_context` | bool | `true` | 仅当用户本轮带图时，移除 `<recent_sent_meme>` 等上一轮自发表情包描述注入块 |
 | `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
 | `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
 | `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
@@ -183,7 +183,7 @@ astrbot_plugin_filter/
 
 ### 机器人把自己发的表情包当成识图对象
 
-配合表情包插件（如 meme_manager）发送表情包后，如果用户下一轮发送新图片，模型可能把“这张图/这个表情”优先指向机器人上一轮自己发送的表情包。`protect_user_media_focus`（默认开启）会在用户本轮带图时自动做两件事：从历史 assistant 消息中剔除机器人自己发送的图片/文件，并移除其它插件注入的 `<recent_sent_meme>` 描述块，让识图目标锁定在用户自己的图片上。该清洗只在用户消息含图片/文件时触发；用户仅发文字并提及“刚才的表情”时，描述上下文仍会保留，不影响该场景。
+配合表情包插件（如 meme_manager）发送表情包后，机器人自己发过的图片会留在会话历史里，多模态模型在后续每次请求中都能看到，导致用户发一句纯文字（比如“晚上好”）时回复仍被表情包话题带偏。`protect_user_media_focus`（默认开启）现在会在**每次请求**中从历史 assistant 消息里剔除机器人自己发送的图片/文件；当用户本轮带图时，还会额外移除 `<recent_sent_meme>` 描述块，让识图目标锁定在用户自己的图片上。用户仅发文字并提及“刚才的表情”时，描述块仍会保留，不影响该场景。
 
 ### 群聊内容防护
 
@@ -195,7 +195,7 @@ astrbot_plugin_filter/
 - **旧版 AstrBot**：4.16 早期版本在丢弃唤醒后仍会短暂占用会话锁并构建 agent（新版已修复），建议升级到较新 4.x。
 - **与内置功能叠加**：AstrBot 自带的"分段回复"会在本插件之后再次处理第一条消息，建议两者只开启一个；第一条分段会带 @/引用，插件直发的后续分段不带，属于预期行为。
 - **合并窗口的终止规划**：窗口关闭后若 bot 已开始生成回复，同用户新消息会终止旧回复并携带合并文本重新生成；在 AstrBot 4.16 上旧请求会继续跑完（token 已消耗、新回复需等会话锁释放），开启 `merge_task_cancel`（需 4.25+）才能真正中断加速。已开始的工具调用或流式输出无法回退。
-- **识图目标清洗为尽力而为**：`protect_user_media_focus` 依赖 `req.contexts`/`req.extra_user_content_parts` 结构（AstrBot 4.24.2+），无法识别的上下文形态会被跳过；若模型仍引用了机器人历史消息中的图片，可尝试升级 AstrBot。
+- **上下文清洗为尽力而为**：`protect_user_media_focus` 依赖 `req.contexts`/`req.extra_user_content_parts` 结构（`extra_user_content_parts` 需 AstrBot 4.24.2+），无法识别的上下文形态会被跳过；若模型仍引用机器人历史消息中的图片，可尝试升级 AstrBot。
 
 ## 📄 许可证
 
@@ -207,6 +207,10 @@ astrbot_plugin_filter/
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
 
 ## 📝 更新日志
+
+### 2.12.1
+
+- 修复纯文字消息被历史表情包话题带偏的问题：`strip_self_media_from_context` 改为每次请求都从历史 assistant 消息中剔除机器人自己发送的图片/文件，不再要求用户本轮带图；用户带图时才额外剔除 `<recent_sent_meme>` 描述块，纯文字追问“刚才的表情”时仍保留该描述。
 
 ### 2.12.0
 

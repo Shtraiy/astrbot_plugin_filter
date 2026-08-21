@@ -157,15 +157,15 @@
     "default": false
   },
   "protect_user_media_focus": {
-    "description": "用户带图时锁定识图目标",
+    "description": "启用请求上下文清洗",
     "type": "bool",
-    "hint": "开启后，当用户本轮发送图片/文件时，自动剔除 LLM 上下文中机器人自己历史消息里的图片，以及其它插件注入的上一轮自发表情包描述（如 <recent_sent_meme>），避免机器人把自己的表情包当成识图对象。",
+    "hint": "开启后，每次请求都会从 LLM 上下文中剔除机器人自己历史消息里的图片/文件；用户本轮带图时还会额外移除其它插件注入的上一轮自发表情包描述（如 <recent_sent_meme>），避免机器人把自己的表情包当成识图对象或把回复带偏。",
     "default": true
   },
   "strip_self_media_from_context": {
-    "description": "剔除历史中机器人自己的图片/文件",
+    "description": "从 LLM 上下文剔除机器人自己的图片/文件",
     "type": "bool",
-    "hint": "用户本轮带图时，从请求上下文的历史 assistant 消息中移除图片/文件组件，防止模型同时看到机器人自己发送的表情包而混淆识图目标。",
+    "hint": "每次请求都从历史 assistant 消息中移除图片/文件组件，防止模型在纯文字消息（如问候）时仍看到机器人自己发过的表情包而继续回复表情包话题。",
     "default": true
   },
   "strip_recent_self_meme_context": {
