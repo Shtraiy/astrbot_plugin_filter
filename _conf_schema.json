@@ -108,6 +108,42 @@
     "hint": "全局队列最多保留 3 条等待中的唤醒，满时丢弃最新消息；填写文案会在丢弃时发送给对应会话，留空则不发送。",
     "default": "队列繁忙，请稍后再试。"
   },
+  "enable_message_merge": {
+    "description": "启用分段消息合并窗口",
+    "type": "bool",
+    "hint": "收到人类唤醒消息后开启短窗口，把同一用户后续发送的纯文本合并进同一次 LLM 请求，避免分段消息被拆成多次回复。",
+    "default": true
+  },
+  "merge_window_seconds": {
+    "description": "合并窗口时长（秒）",
+    "type": "float",
+    "hint": "从第一条唤醒消息起等待后续分段的时长，运行时限制在 1~30 秒，默认 6 秒。",
+    "default": 6.0
+  },
+  "merge_max_messages": {
+    "description": "单个窗口最多合并的消息条数",
+    "type": "int",
+    "hint": "超过该条数后不再捕获后续消息；设为 0 表示不限制。",
+    "default": 5
+  },
+  "merge_max_chars": {
+    "description": "合并文本最大字符数",
+    "type": "int",
+    "hint": "累计合并文本超过该字符数后不再捕获；设为 0 表示不限制。",
+    "default": 2000
+  },
+  "merge_ignore_prefixes": {
+    "description": "不参与合并的消息前缀",
+    "type": "string",
+    "hint": "逗号分隔；以这些前缀开头的后续消息不会被合并（如命令）。",
+    "default": "/,!"
+  },
+  "merge_task_cancel": {
+    "description": "合并时取消旧 pipeline 任务",
+    "type": "bool",
+    "hint": "规划中收到同用户新消息时，尝试真正取消旧请求任务以加速重新回复；依赖 AstrBot 4.25+ 的取消传播，旧版本请保持关闭。",
+    "default": false
+  },
   "enable_content_guard": {
     "description": "启用群聊内容防护",
     "type": "bool",

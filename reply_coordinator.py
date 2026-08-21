@@ -314,6 +314,16 @@ class ReplyCoordinator:
         self._cancelled_event_ids.discard(id(event))
         return True
 
+    def supersede_active_event(self, event: Any) -> bool:
+        """Cancel an active event's reply and release its gate for a merged follow-up."""
+        self._cleanup_expired()
+        if event is None or not self._event_matches(self._active_event, event):
+            return False
+        self._remember_cancelled(event)
+        self._stop_event(event)
+        self._finish_active(event, apply_cooldown=False)
+        return True
+
     async def acquire_reply(self, event: Any) -> ReplySession:
         origin = self._gate_key(event)
         reply_lock = self.reply_locks.setdefault(origin, asyncio.Lock())

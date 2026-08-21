@@ -22,6 +22,7 @@ from .content_guard import (
 )
 from .image_renderer import cleanup_temp_file, should_render_image, text_to_image
 from .message_dispatcher import DispatchPolicy, MessageDispatcher
+from .merge_window import MergeWindowManager
 from .segmentation import (
     apply_segmentation_and_style,
     prepare_multi_message_parts,
@@ -94,14 +95,69 @@ class LanguageLogicOptimizer(Star):
             self._message_dispatcher = dispatcher
         return dispatcher
 
+    def _get_message_merger(self) -> MergeWindowManager:
+        merger = getattr(self, "_message_merger", None)
+        if merger is None:
+            merger = MergeWindowManager(get_config=self._get_config)
+            self._message_merger = merger
+        return merger
+
+    @_event_filter.on_message()
+    async def on_message(self, event: AstrMessageEvent) -> None:
+        """Capture same-user follow-up text while a merge window is open."""
+        if not self._get_config("enable_message_merge", True):
+            return
+        try:
+            self._get_message_merger().capture(event)
+        except Exception:
+            logger.debug("[消息合并] 捕获消息失败", exc_info=True)
+
     @_event_filter.on_waiting_llm_request()
     async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
-        """Admit wake-ups globally before they wait for AstrBot's session lock."""
-        await self._get_reply_coordinator().admit_wakeup(event)
+        """Admit wake-ups globally; hold the first one to collect segments."""
+        merger = self._get_message_merger()
+        merge_key = (
+            merger.user_key(event)
+            if self._get_config("enable_message_merge", True)
+            else None
+        )
+        if merge_key is not None:
+            if merger.is_window_open(event):
+                merger.capture(event)
+                event.stop_event()
+                return
+            pending = merger.take_planning(event)
+            if pending is not None:
+                old_event, earlier_text, pipeline_task = pending
+                if self._get_reply_coordinator().supersede_active_event(old_event):
+                    if (
+                        self._get_config("merge_task_cancel", False)
+                        and pipeline_task is not None
+                        and not pipeline_task.done()
+                    ):
+                        try:
+                            pipeline_task.cancel()
+                        except Exception:
+                            logger.debug("[消息合并] 旧任务取消失败", exc_info=True)
+                    event.message_str = merger.join_text(
+                        earlier_text,
+                        str(getattr(event, "message_str", "") or ""),
+                    )
+        if not await self._get_reply_coordinator().admit_wakeup(event):
+            return
+        if merge_key is not None:
+            pipeline_task = asyncio.current_task()
+            if merger.start_window(event, pipeline_task=pipeline_task):
+                try:
+                    await asyncio.sleep(self._get_merge_window_seconds())
+                finally:
+                    event.message_str = merger.finalize_window(event)
 
     @_event_filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
         """Idempotent admission check immediately before the LLM request."""
+        if _event_is_stopped(event):
+            return
         if not await self._get_reply_coordinator().admit_wakeup(event):
             return
         if not self._get_config("enable_content_guard", True):
@@ -129,6 +185,7 @@ class LanguageLogicOptimizer(Star):
 
         if self._get_reply_coordinator().discard_superseded_result(event):
             return
+        self._get_message_merger().clear_owner(event)
 
         result = None
         reply_key = None
@@ -309,6 +366,7 @@ class LanguageLogicOptimizer(Star):
     # This callback owns the response gate cleanup, so it must not be skipped.
     @_event_filter.after_message_sent(priority=1000)
     async def after_message_sent(self, event: AstrMessageEvent) -> None:
+        self._get_message_merger().clear_owner(event)
         coordinator = self._get_reply_coordinator()
         coordinator.pending_sends = getattr(self, "_pending_sends", coordinator.pending_sends)
         coordinator.pending_send = getattr(self, "_pending_send", coordinator.pending_send)
@@ -475,6 +533,13 @@ class LanguageLogicOptimizer(Star):
         delay_max = min(5.0, max(2.0, self._get_float_config("delay_max", 5.0)))
         return (delay_min, delay_max) if delay_min <= delay_max else (delay_max, delay_min)
 
+    def _get_merge_window_seconds(self) -> float:
+        """Return the same-user merge window duration, bounded to 1-30 seconds."""
+        value = self._get_float_config("merge_window_seconds", 6.0)
+        if not math.isfinite(value):
+            return 6.0
+        return min(30.0, max(1.0, value))
+
     def _get_wakeup_interval(self) -> tuple[float, float]:
         """Return a safe global interval between completed wake-ups."""
         delay_min = max(
@@ -500,6 +565,16 @@ class LanguageLogicOptimizer(Star):
 
 
 _MISSING = object()
+
+
+def _event_is_stopped(event) -> bool:
+    checker = getattr(event, "is_stopped", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:
+            return False
+    return bool(getattr(event, "stopped", False))
 
 
 def _read_config_value(source, key: str, default):
