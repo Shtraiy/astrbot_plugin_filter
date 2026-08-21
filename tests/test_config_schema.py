@@ -22,6 +22,7 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(schema["merge_max_chars"]["default"], 2000)
         self.assertEqual(schema["merge_ignore_prefixes"]["default"], "/,!")
         self.assertEqual(schema["merge_include_media"]["default"], True)
+        self.assertEqual(schema["merge_continuation_ttl"]["default"], 120.0)
         self.assertEqual(schema["merge_task_cancel"]["default"], False)
         for key, value in schema.items():
             self.assertIsInstance(value, dict, key)

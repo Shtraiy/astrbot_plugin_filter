@@ -144,6 +144,12 @@
     "hint": "开启后，窗口内同一用户发送的图片和文件会随文本一并合并进同一次 LLM 请求；引用/转发等其它类型仍不参与合并。",
     "default": true
   },
+  "merge_continuation_ttl": {
+    "description": "规划期补充消息的保留时长（秒）",
+    "type": "float",
+    "hint": "窗口关闭后、回复生成期间收到的同用户无唤醒词补充，会暂存并在该用户下一次唤醒时并入；超过此时长后失效。设为 0 关闭该保留行为。",
+    "default": 120.0
+  },
   "merge_task_cancel": {
     "description": "合并时取消旧 pipeline 任务",
     "type": "bool",

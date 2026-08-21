@@ -6,7 +6,7 @@ from _astrbot_plugin_filter_test.merge_window import MergeWindowManager
 
 
 class FakeEvent:
-    def __init__(self, sender, origin, text="", *, wake=True, chain=None):
+    def __init__(self, sender, origin, text="", *, wake=False, chain=None):
         self.sender = sender
         self.unified_msg_origin = origin
         self.message_str = text
@@ -30,7 +30,8 @@ class FakeEvent:
 
 def make_manager(**config):
     return MergeWindowManager(
-        get_config=lambda key, default: config.get(key, default)
+        get_config=lambda key, default: config.get(key, default),
+        now=config.get("now"),
     )
 
 
@@ -242,3 +243,74 @@ def test_take_planning_carries_media():
     _old_event, text, media, _task = result
     assert text == "第一段"
     assert media == [img]
+
+
+def test_capture_skips_wake_followups():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+
+    assert not manager.capture(FakeEvent("u1", "group:1", "第二段", wake=True))
+    assert manager.finalize_window(owner) == "第一段"
+
+
+def test_merge_wake_appends_during_window():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+
+    assert manager.merge_wake(FakeEvent("u1", "group:1", "@bot 第二段", wake=True))
+    assert manager.finalize_window(owner) == "第一段\n第二段"
+
+
+def test_capture_works_during_planning_phase():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+    manager.finalize_window(owner)
+
+    assert manager.capture(FakeEvent("u1", "group:1", "补充内容"))
+    result = manager.take_planning(FakeEvent("u1", "group:1", "第二段"))
+
+    assert result is not None
+    _old_event, text, _media, _task = result
+    assert text == "第一段\n补充内容"
+
+
+def test_clear_owner_keeps_continuation_when_captures_exist():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+    manager.finalize_window(owner)
+    manager.capture(FakeEvent("u1", "group:1", "补充内容"))
+    manager.clear_owner(owner)
+
+    result = manager.take_planning(FakeEvent("u1", "group:1", "第二段"))
+
+    assert result is not None
+    old_event, text, _media, _task = result
+    assert old_event is None
+    assert text == "第一段\n补充内容"
+
+
+def test_clear_owner_drops_state_without_captures():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+    manager.finalize_window(owner)
+    manager.clear_owner(owner)
+
+    assert manager.take_planning(FakeEvent("u1", "group:1", "第二段")) is None
+
+
+def test_continuation_expires_after_ttl():
+    now = [100.0]
+    manager = make_manager(merge_continuation_ttl=30.0, now=lambda: now[0])
+    owner = FakeEvent("u1", "group:1", "第一段")
+    manager.start_window(owner)
+    manager.finalize_window(owner)
+    manager.capture(FakeEvent("u1", "group:1", "补充内容"))
+    manager.clear_owner(owner)
+    now[0] += 31.0
+
+    assert manager.take_planning(FakeEvent("u1", "group:1", "第二段")) is None

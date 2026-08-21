@@ -63,6 +63,7 @@ def make_optimizer(**overrides):
         "merge_max_messages": 5,
         "merge_max_chars": 2000,
         "merge_ignore_prefixes": "/,!",
+        "merge_continuation_ttl": 120.0,
         "merge_task_cancel": False,
         "enable_content_guard": False,
         "enable_llm_style": False,
@@ -184,7 +185,7 @@ def test_image_followup_merged_into_owner_chain():
     optimizer = make_optimizer()
     first = FakeEvent("u1", "group:1", "看看这张图", wake=True)
     img = Image("http://example.com/a.png")
-    second = FakeEvent("u1", "group:1", chain=[img])
+    second = FakeEvent("u1", "group:1", chain=[img], wake=False)
 
     async def run():
         first_task = asyncio.create_task(
@@ -201,3 +202,27 @@ def test_image_followup_merged_into_owner_chain():
         getattr(comp, "url", "") == "http://example.com/a.png"
         for comp in first.message_obj.message
     )
+
+
+def test_planning_continuation_merges_into_next_wake():
+    optimizer = make_optimizer(merge_continuation_ttl=120.0)
+    first = FakeEvent("u1", "group:1", "第一段", wake=True)
+    supplement = FakeEvent("u1", "group:1", "补充内容", wake=False)
+    next_wake = FakeEvent("u1", "group:1", "继续", wake=True)
+
+    async def run():
+        first_task = asyncio.create_task(
+            optimizer.on_waiting_llm_request(first)
+        )
+        await asyncio.sleep(0.05)
+        await first_task
+        await optimizer.on_message(supplement)
+        optimizer._get_message_merger().clear_owner(first)
+        optimizer._release_gate(first)
+        await optimizer.on_waiting_llm_request(next_wake)
+        return next_wake
+
+    next_wake = asyncio.run(run())
+
+    assert next_wake.message_str.startswith("第一段\n补充内容")
+    assert "继续" in next_wake.message_str

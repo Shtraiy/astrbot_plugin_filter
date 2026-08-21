@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -21,6 +22,8 @@ class _MergeState:
     pending_media: list[Any] = field(default_factory=list)
     captured_events: set[Any] = field(default_factory=set)
     captured_count: int = 0
+    planning_captures: int = 0
+    continued_at: float = 0.0
     pipeline_task: Any = None
 
 
@@ -39,9 +42,11 @@ class MergeWindowManager:
         self,
         *,
         get_config: Callable[[str, Any], Any] | None = None,
+        now: Callable[[], float] | None = None,
     ) -> None:
         self._states: dict[tuple[str, str], _MergeState] = {}
         self._get_config = get_config or (lambda _key, default: default)
+        self._now = now or time.monotonic
 
     @classmethod
     def user_key(cls, event: Any) -> tuple[str, str] | None:
@@ -71,6 +76,17 @@ class MergeWindowManager:
                 return False
         return bool(getattr(event, "stopped", False))
 
+    @staticmethod
+    def _event_is_wake_up(event: Any) -> bool:
+        checker = getattr(event, "is_wake_up", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return True
+        value = getattr(event, "is_wake_up", None)
+        return bool(value) if value is not None else True
+
     @classmethod
     def join_text(cls, earlier: str, later: str) -> str:
         cleaned = _MENTION_LEAD_RE.sub("", later or "").strip()
@@ -81,8 +97,16 @@ class MergeWindowManager:
 
     def start_window(self, event: Any, *, pipeline_task: Any = None) -> bool:
         key = self.user_key(event)
-        if key is None or key in self._states:
+        if key is None:
             return False
+        existing = self._states.get(key)
+        if existing is not None:
+            if existing.phase == "continuation" and self._continuation_expired(
+                existing
+            ):
+                self._states.pop(key, None)
+            else:
+                return False
         if len(self._states) >= MAX_MERGE_STATES:
             self._states.pop(next(iter(self._states)), None)
         self._states[key] = _MergeState(
@@ -105,7 +129,41 @@ class MergeWindowManager:
         )
 
     def capture(self, event: Any) -> bool:
-        """Append a same-user follow-up into the open window, if eligible."""
+        """Append a same-user non-wake follow-up into the merge state."""
+        key = self.user_key(event)
+        if key is None:
+            return False
+        state = self._states.get(key)
+        if state is None:
+            return False
+        if state.owner_event is event or event in state.captured_events:
+            return False
+        if self._event_is_wake_up(event):
+            return False
+        if state.phase == "continuation" and self._continuation_expired(state):
+            self._states.pop(key, None)
+            return False
+        payload = self._extract_merge_payload(event)
+        if payload is None:
+            return False
+        text, media = payload
+        if text and not self._mergeable(text):
+            return False
+        if not text and not media:
+            return False
+        if not self._within_limits(state, text, media):
+            return False
+        if text:
+            state.pending_text = self.join_text(state.pending_text, text)
+        state.pending_media.extend(media)
+        state.captured_events.add(event)
+        state.captured_count += 1
+        if state.phase != "window":
+            state.planning_captures += 1
+        return True
+
+    def merge_wake(self, event: Any) -> bool:
+        """Append a same-user wake follow-up while the window is still open."""
         key = self.user_key(event)
         if key is None:
             return False
@@ -152,12 +210,22 @@ class MergeWindowManager:
         if key is None:
             return None
         state = self._states.get(key)
-        if state is None or state.phase != "planning":
+        if state is None or state.phase == "window":
             return None
         self._states.pop(key, None)
+        if state.phase == "continuation":
+            if self._continuation_expired(state):
+                return None
+            return (
+                None,
+                state.pending_text,
+                list(state.pending_media),
+                None,
+            )
         if self._event_stopped(state.owner_event):
             return None
         media = self._owner_media(state.owner_event)
+        media.extend(state.pending_media)
         return (
             state.owner_event,
             state.pending_text,
@@ -171,8 +239,18 @@ class MergeWindowManager:
         if key is None:
             return
         state = self._states.get(key)
-        if state is not None and state.owner_event is event:
-            self._states.pop(key, None)
+        if state is None or state.owner_event is not event:
+            return
+        if (
+            state.phase == "planning"
+            and state.planning_captures > 0
+            and self._continuation_ttl() > 0
+        ):
+            state.phase = "continuation"
+            state.continued_at = self._now()
+            state.owner_event = None
+            return
+        self._states.pop(key, None)
 
     def _extract_merge_payload(self, event: Any) -> tuple[str, list[Any]] | None:
         """Return (text, media_components) when the message is mergeable."""
@@ -258,3 +336,14 @@ class MergeWindowManager:
             return max(0, int(self._get_config("merge_max_chars", 2000)))
         except (TypeError, ValueError):
             return 2000
+
+    def _continuation_ttl(self) -> float:
+        try:
+            value = float(self._get_config("merge_continuation_ttl", 120.0))
+        except (TypeError, ValueError):
+            return 120.0
+        return max(0.0, value)
+
+    def _continuation_expired(self, state: _MergeState) -> bool:
+        ttl = self._continuation_ttl()
+        return ttl > 0 and self._now() - state.continued_at > ttl

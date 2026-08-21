@@ -123,15 +123,23 @@ class LanguageLogicOptimizer(Star):
         )
         if merge_key is not None:
             if merger.is_window_open(event):
-                merger.capture(event)
+                merger.merge_wake(event)
                 event.stop_event()
                 return
             pending = merger.take_planning(event)
             if pending is not None:
                 old_event, earlier_text, earlier_media, pipeline_task = pending
-                if self._get_reply_coordinator().supersede_active_event(old_event):
+                superseded = (
+                    old_event is None
+                    or self._get_reply_coordinator().supersede_active_event(
+                        old_event
+                    )
+                )
+                if superseded:
                     merger.attach_media(event, earlier_media)
                     if (
+                        old_event is not None
+                        and
                         self._get_config("merge_task_cancel", False)
                         and pipeline_task is not None
                         and not pipeline_task.done()
