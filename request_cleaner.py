@@ -78,24 +78,49 @@ def strip_assistant_media(req: Any) -> int:
     """Remove media parts from assistant-role history entries.
 
     Returns the number of removed media blocks. Only in-place mutable dict
-    entries are touched; anything unrecognized is left alone.
+    entries (or objects with a settable ``content`` attribute) are touched;
+    anything unrecognized is left alone.
     """
     contexts = _request_contexts(req)
     if not contexts:
         return 0
     removed = 0
     for entry in contexts:
-        if not isinstance(entry, Mapping):
-            continue
-        role = str(entry.get("role", "") or "").casefold()
+        role = str(_entry_role(entry) or "").casefold()
         if role not in {"assistant", "bot", "ai"}:
             continue
-        content = entry.get("content")
+        content = _entry_content(entry)
         cleaned, count = _strip_media_from_content(content)
         if count:
-            entry["content"] = cleaned
+            _set_entry_content(entry, cleaned)
             removed += count
     return removed
+
+
+def count_assistant_media(req: Any) -> int:
+    """Count media blocks inside assistant history entries (read-only)."""
+    contexts = _request_contexts(req)
+    if not contexts:
+        return 0
+    total = 0
+    for entry in contexts:
+        role = str(_entry_role(entry) or "").casefold()
+        if role not in {"assistant", "bot", "ai"}:
+            continue
+        total += _count_media(_entry_content(entry))
+    return total
+
+
+def describe_contexts(req: Any) -> str:
+    """Compact structural summary of the request history for diagnostics."""
+    contexts = _request_contexts(req)
+    if not contexts:
+        return "no-contexts"
+    roles: dict[str, int] = {}
+    for entry in contexts:
+        role = str(_entry_role(entry) or "?").casefold() or "?"
+        roles[role] = roles.get(role, 0) + 1
+    return f"entries={len(contexts)} roles={roles}"
 
 
 def strip_recent_self_meme_context(req: Any) -> int:
@@ -199,6 +224,15 @@ def _strip_media_from_content(content: Any) -> tuple[Any, int]:
                 content["content"] = cleaned
             return content, count
         return content, 0
+    nested = getattr(content, "content", None)
+    if nested is not None:
+        cleaned, count = _strip_media_from_content(nested)
+        if count:
+            try:
+                content.content = cleaned
+            except Exception:
+                pass
+        return content, count
     if _is_media_part(content):
         return "", 1
     return content, 0
@@ -214,6 +248,45 @@ def _is_media_part(part: Any) -> bool:
         return any(token in ptype for token in _MEDIA_TYPE_TOKENS)
     name = type(part).__name__.casefold()
     return any(token in name for token in _MEDIA_TYPE_TOKENS)
+
+
+def _entry_role(entry: Any) -> Any:
+    if isinstance(entry, Mapping):
+        return entry.get("role")
+    return getattr(entry, "role", None)
+
+
+def _entry_content(entry: Any) -> Any:
+    if isinstance(entry, Mapping):
+        return entry.get("content")
+    return getattr(entry, "content", None)
+
+
+def _set_entry_content(entry: Any, value: Any) -> None:
+    if isinstance(entry, Mapping):
+        entry["content"] = value
+        return
+    try:
+        entry.content = value
+    except Exception:
+        pass
+
+
+def _count_media(content: Any) -> int:
+    if content is None or isinstance(content, str):
+        return 0
+    if isinstance(content, list):
+        return sum(_count_media(item) for item in content)
+    if isinstance(content, Mapping):
+        if _is_media_part(content):
+            return 1
+        if "content" in content:
+            return _count_media(content["content"])
+        return 0
+    nested = getattr(content, "content", None)
+    if nested is not None:
+        return _count_media(nested)
+    return 1 if _is_media_part(content) else 0
 
 
 def _is_self_meme_part(part: Any) -> bool:

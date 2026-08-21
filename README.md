@@ -2,7 +2,7 @@
 
 # AstrBot 回复优化大师
 
-[![version](https://img.shields.io/badge/version-v2.13.2-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v2.13.3-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -218,6 +218,10 @@ astrbot_plugin_filter/
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
 
 ## 📝 更新日志
+
+### 2.13.3
+
+- 加固机器人自身历史媒体的剔除：支持对象型上下文条目和嵌套 Message 结构，进一步覆盖“一边发表情包一边识别自己表情包”的场景；新增诊断日志，若检测到 assistant 历史媒体却无法剔除会输出告警与上下文结构，便于定位。
 
 ### 2.13.2
 

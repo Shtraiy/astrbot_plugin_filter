@@ -9,6 +9,8 @@ from request_cleaner import (
     append_image_text_note,
     asks_about_image_text,
     asks_about_own_media,
+    count_assistant_media,
+    describe_contexts,
     has_user_media,
     strip_assistant_media,
     strip_recent_self_meme_context,
@@ -25,6 +27,17 @@ class FakeReq:
     def __init__(self, contexts=None, extra_user_content_parts=None):
         self.contexts = contexts or []
         self.extra_user_content_parts = extra_user_content_parts or []
+
+
+class MessageLike:
+    def __init__(self, content):
+        self.content = content
+
+
+class EntryLike:
+    def __init__(self, role, content):
+        self.role = role
+        self.content = content
 
 
 def test_has_user_media_detects_image_and_file():
@@ -107,6 +120,55 @@ def test_strip_assistant_media_ignores_unrecognized_shapes():
 
     assert removed == 0
     assert req.contexts[1]["content"][0]["type"] == "image_url"
+
+
+def test_strip_assistant_media_handles_object_entries_and_nested_content():
+    req = FakeReq(
+        contexts=[
+            EntryLike(
+                role="assistant",
+                content=MessageLike(
+                    [
+                        {"type": "text", "text": "回复"},
+                        {"type": "image_url", "image_url": {"url": "bot.png"}},
+                    ]
+                ),
+            ),
+            EntryLike(role="user", content=MessageLike([{"type": "image_url", "image_url": {"url": "u.png"}}])),
+        ]
+    )
+
+    removed = strip_assistant_media(req)
+
+    assert removed == 1
+    assert req.contexts[0].content.content == [{"type": "text", "text": "回复"}]
+    # User-role media is intentionally kept.
+    assert req.contexts[1].content.content[0]["type"] == "image_url"
+
+
+def test_count_assistant_media_and_describe_contexts():
+    req = FakeReq(
+        contexts=[
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "ok"},
+                    {"type": "image_url", "image_url": {"url": "a"}},
+                ],
+            },
+            EntryLike(role="assistant", content=Image("b.png")),
+        ]
+    )
+
+    assert count_assistant_media(req) == 2
+    assert "entries=3" in describe_contexts(req)
+    assert "assistant" in describe_contexts(req)
+
+
+def test_count_assistant_media_empty():
+    assert count_assistant_media(FakeReq()) == 0
+    assert count_assistant_media(None) == 0
 
 
 def test_strip_recent_self_meme_context_removes_only_meme_block():

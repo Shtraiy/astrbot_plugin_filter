@@ -35,6 +35,8 @@ from .request_cleaner import (
     append_image_text_note,
     asks_about_image_text,
     asks_about_own_media,
+    count_assistant_media,
+    describe_contexts,
     has_user_media,
     strip_assistant_media,
     strip_recent_self_meme_context,
@@ -213,9 +215,11 @@ class LanguageLogicOptimizer(Star):
             return
         if req is None:
             return
+        scanned_media = 0
         removed_media = 0
         removed_meme = 0
         try:
+            scanned_media = count_assistant_media(req)
             if self._get_config("strip_self_media_from_context", True):
                 removed_media = strip_assistant_media(req)
             if self._get_config("strip_recent_self_meme_context", True):
@@ -223,6 +227,12 @@ class LanguageLogicOptimizer(Star):
         except Exception:
             logger.debug("[请求清洗] 上下文清洗失败", exc_info=True)
             return
+        if scanned_media and not removed_media:
+            logger.warning(
+                "[请求清洗] 检测到 assistant 历史媒体 %d 个但未能剔除，上下文结构未识别：%s",
+                scanned_media,
+                describe_contexts(req),
+            )
         if removed_media or removed_meme:
             logger.info(
                 "[请求清洗] 已剔除历史机器人图片/文件=%d、自发表情包描述=%d",

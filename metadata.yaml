@@ -1,7 +1,7 @@
 name: astrbot_plugin_filter
 display_name: "\u56de\u590d\u4f18\u5316\u5927\u5e08"
 desc: "\u7efc\u5408\u4f18\u5316 AstrBot \u8f93\u51fa\u6587\u672c\uff0c\u6e05\u7406\u5143\u6570\u636e\u3001\u5de5\u5177\u540d\u548c\u654f\u611f\u4fe1\u606f\uff0c\u652f\u6301 LLM \u6587\u98ce\u4f18\u5316\u3001\u667a\u80fd\u5206\u6bb5\u3001\u5217\u8868\u56fe\u7247\u6e32\u67d3\u4e0e\u5206\u6bb5\u6d88\u606f\u5408\u5e76\u3002"
-version: 2.13.2
+version: 2.13.3
 author: Shtraiy
 repo: https://github.com/Shtraiy/astrbot_plugin_filter
 astrbot_version: ">=4.16,<5"
