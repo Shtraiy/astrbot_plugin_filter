@@ -5,6 +5,8 @@ from astrbot.api.message_components import Image, Plain
 
 from main import LanguageLogicOptimizer
 from request_cleaner import (
+    append_attribution_note,
+    asks_about_own_media,
     has_user_media,
     strip_assistant_media,
     strip_recent_self_meme_context,
@@ -131,6 +133,25 @@ def test_cleaners_tolerate_none_and_unknown_objects():
     assert strip_assistant_media(None) == 0
     assert strip_recent_self_meme_context(object()) == 0
     assert strip_assistant_media(object()) == 0
+    assert append_attribution_note(object()) is False
+
+
+def test_asks_about_own_media_detection():
+    assert asks_about_own_media("我发了什么表情包") is True
+    assert asks_about_own_media("我发过图吗") is True
+    assert asks_about_own_media("我发过什么图片") is True
+    assert asks_about_own_media("晚上好") is False
+    assert asks_about_own_media("我发给你") is False
+
+
+def test_append_attribution_note_adds_part():
+    req = FakeReq(extra_user_content_parts=[])
+
+    added = append_attribution_note(req)
+
+    assert added is True
+    assert len(req.extra_user_content_parts) == 1
+    assert "attribution_note" in req.extra_user_content_parts[0].text
 
 
 def test_on_llm_request_cleans_context_when_user_sends_image():
@@ -222,6 +243,33 @@ def test_on_llm_request_keeps_recent_meme_bridge_when_configured_off():
     asyncio.run(run())
 
     assert len(req.extra_user_content_parts) == 1
+
+
+def test_on_llm_request_injects_attribution_note_for_own_media_question():
+    optimizer = make_optimizer()
+    event = FakeEvent("u1", "g:1", "我发了什么表情包", wake=True)
+    req = FakeReq(extra_user_content_parts=[])
+
+    async def run():
+        await optimizer.on_llm_request(event, req)
+
+    asyncio.run(run())
+
+    assert len(req.extra_user_content_parts) == 1
+    assert "attribution_note" in req.extra_user_content_parts[0].text
+
+
+def test_on_llm_request_skips_attribution_note_for_normal_message():
+    optimizer = make_optimizer()
+    event = FakeEvent("u1", "g:1", "晚上好", wake=True)
+    req = FakeReq(extra_user_content_parts=[])
+
+    async def run():
+        await optimizer.on_llm_request(event, req)
+
+    asyncio.run(run())
+
+    assert req.extra_user_content_parts == []
 
 
 def test_on_llm_request_respects_master_switch():

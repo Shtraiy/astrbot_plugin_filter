@@ -199,6 +199,13 @@
     "default": true,
     "invisible": true
   },
+  "guard_own_media_attribution": {
+    "description": "纠正“我发了什么”类问题的消息归属",
+    "type": "bool",
+    "hint": "用户询问自己发送过的内容（如“我发了什么表情包”）时，在请求中注入一条归属提示：assistant 消息属于机器人自己，user 消息才是用户发送的，避免模型把机器人自己的表情包当成用户发的。",
+    "default": true,
+    "invisible": true
+  },
   "enable_content_guard": {
     "description": "启用群聊内容防护",
     "type": "bool",

@@ -34,6 +34,8 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(schema["merge_include_media"]["default"], True)
         self.assertEqual(schema["merge_continuation_ttl"]["default"], 120.0)
         self.assertEqual(schema["merge_task_cancel"]["default"], False)
+        self.assertEqual(schema["guard_own_media_attribution"]["default"], True)
+        self.assertTrue(schema["guard_own_media_attribution"]["invisible"])
         for key, value in schema.items():
             self.assertIsInstance(value, dict, key)
             self.assertIn(value.get("type"), supported_types, key)

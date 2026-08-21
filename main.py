@@ -31,6 +31,8 @@ from .outbound_pipeline import OutboundTextPipeline
 from .reply_coordinator import GateState as _GateState
 from .reply_coordinator import ReplyCoordinator, ReplySession
 from .request_cleaner import (
+    append_attribution_note,
+    asks_about_own_media,
     strip_assistant_media,
     strip_recent_self_meme_context,
 )
@@ -174,6 +176,7 @@ class LanguageLogicOptimizer(Star):
         if not await self._get_reply_coordinator().admit_wakeup(event):
             return
         self._clean_media_focus_context(event, req)
+        self._guard_own_media_attribution(event, req)
         if not self._get_config("enable_content_guard", True):
             return
 
@@ -223,6 +226,27 @@ class LanguageLogicOptimizer(Star):
                 removed_media,
                 removed_meme,
             )
+
+    def _guard_own_media_attribution(self, event: AstrMessageEvent, req) -> None:
+        """Correct role attribution when the user asks about their own media.
+
+        Memories and history text (e.g. the bot's own past claims like "你又发
+        这种可爱的表情包") can make the model attribute the bot's own memes to
+        the user. For "我发了什么/我发过吗" style questions, append a note that
+        clarifies user vs assistant ownership.
+        """
+        if not self._get_config("guard_own_media_attribution", True):
+            return
+        if req is None:
+            return
+        text = str(getattr(event, "message_str", "") or "")
+        if not asks_about_own_media(text):
+            return
+        try:
+            if append_attribution_note(req):
+                logger.info("[请求清洗] 检测到'我发了什么'类提问，已注入消息归属提示")
+        except Exception:
+            logger.debug("[请求清洗] 消息归属提示注入失败", exc_info=True)
 
     @_event_filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):

@@ -10,11 +10,31 @@ These helpers strip that noise from the request before it reaches the LLM.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any
 
 
 _MEDIA_TYPE_TOKENS = ("image", "file", "audio", "video", "record")
 _TEXT_TYPES = {"text", "input_text", "plain"}
+_OWN_MEDIA_QUESTION_HINTS = (
+    "表情",
+    "表情包",
+    "图",
+    "图片",
+    "照片",
+    "文件",
+    "视频",
+    "音频",
+    "语音",
+)
+_ATTRIBUTION_NOTE = (
+    "<attribution_note>"
+    "用户正在询问自己发送过的内容。请严格按消息角色区分归属："
+    "role=user（人类）的消息才是用户发送的；role=assistant（机器人）的消息——包括其中的图片和文字——属于机器人自己。"
+    "若用户从未发送过表情包或图片，请如实回答没有发送过，不要描述机器人自己发送的内容。"
+    "只有确认用户确实发送过时，才能描述用户发送的那一张。"
+    "</attribution_note>"
+)
 
 
 def has_user_media(event: Any) -> bool:
@@ -69,6 +89,25 @@ def strip_recent_self_meme_context(req: Any) -> int:
     if removed:
         parts[:] = kept
     return removed
+
+
+def asks_about_own_media(text: str) -> bool:
+    """Return True when the user asks about media they themselves sent."""
+    if "我发" not in (text or ""):
+        return False
+    return any(hint in text for hint in _OWN_MEDIA_QUESTION_HINTS)
+
+
+def append_attribution_note(req: Any) -> bool:
+    """Append a role-attribution note to the user message content."""
+    parts = getattr(req, "extra_user_content_parts", None)
+    if not isinstance(parts, list):
+        return False
+    part = _make_text_part(_ATTRIBUTION_NOTE)
+    if part is None:
+        return False
+    parts.append(part)
+    return True
 
 
 def _request_contexts(req: Any) -> list[Any] | None:
@@ -143,6 +182,24 @@ def _is_self_meme_part(part: Any) -> bool:
     if not isinstance(text, str):
         text = ""
     return "<recent_sent_meme>" in text or "</recent_sent_meme>" in text
+
+
+def _make_text_part(text: str) -> Any | None:
+    try:
+        from astrbot.core.agent.message import TextPart
+    except Exception:
+        return SimpleNamespace(text=text)
+    try:
+        part = TextPart(text=text)
+    except Exception:
+        return None
+    mark_as_temp = getattr(part, "mark_as_temp", None)
+    if callable(mark_as_temp):
+        try:
+            part = mark_as_temp()
+        except Exception:
+            pass
+    return part
 
 
 def _content_empty(value: Any) -> bool:
