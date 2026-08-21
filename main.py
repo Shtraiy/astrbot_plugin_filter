@@ -31,7 +31,6 @@ from .outbound_pipeline import OutboundTextPipeline
 from .reply_coordinator import GateState as _GateState
 from .reply_coordinator import ReplyCoordinator, ReplySession
 from .request_cleaner import (
-    has_user_media,
     strip_assistant_media,
     strip_recent_self_meme_context,
 )
@@ -199,9 +198,10 @@ class LanguageLogicOptimizer(Star):
         The bot's own outgoing images stay in the conversation history and are
         visible to multimodal models on every later request, which hijacks
         replies even for plain-text messages such as a greeting. Always remove
-        media from assistant history; when the current user message carries
-        media, also remove other plugins' "recently sent self meme" text
-        injection so the recognition target stays on the user's own image.
+        media from assistant history and always remove other plugins'
+        "recently sent self meme" text injection (it is appended into the user
+        message, so the model can mistake the bot's own meme for one the user
+        just sent).
         """
         if not self._get_config("protect_user_media_focus", True):
             return
@@ -212,14 +212,7 @@ class LanguageLogicOptimizer(Star):
         try:
             if self._get_config("strip_self_media_from_context", True):
                 removed_media = strip_assistant_media(req)
-            try:
-                user_has_media = has_user_media(event)
-            except Exception:
-                user_has_media = False
-            if (
-                user_has_media
-                and self._get_config("strip_recent_self_meme_context", True)
-            ):
+            if self._get_config("strip_recent_self_meme_context", True):
                 removed_meme = strip_recent_self_meme_context(req)
         except Exception:
             logger.debug("[请求清洗] 上下文清洗失败", exc_info=True)

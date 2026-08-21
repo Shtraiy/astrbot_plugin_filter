@@ -159,7 +159,7 @@
   "protect_user_media_focus": {
     "description": "启用请求上下文清洗",
     "type": "bool",
-    "hint": "开启后，每次请求都会从 LLM 上下文中剔除机器人自己历史消息里的图片/文件；用户本轮带图时还会额外移除其它插件注入的上一轮自发表情包描述（如 <recent_sent_meme>），避免机器人把自己的表情包当成识图对象或把回复带偏。",
+    "hint": "开启后，每次请求都会从 LLM 上下文中剔除机器人自己历史消息里的图片/文件，并移除其它插件注入的上一轮自发表情包描述（如 <recent_sent_meme>），避免模型把机器人自己的表情包当成用户刚发的图。",
     "default": true
   },
   "strip_self_media_from_context": {
@@ -171,7 +171,7 @@
   "strip_recent_self_meme_context": {
     "description": "剔除上一轮自发表情包描述注入",
     "type": "bool",
-    "hint": "用户本轮带图时，移除 meme_manager 等插件注入的 <recent_sent_meme> 文本块，避免模型把“这张图/这个表情”优先指向机器人上一轮自己发送的表情包。",
+    "hint": "每次请求都移除 meme_manager 等插件注入的 <recent_sent_meme> 文本块。该文本块会拼进用户消息，模型可能误以为用户刚发送了表情包；若需要保留以便用户纯文字追问“刚才的表情”，可关闭此项。",
     "default": true
   },
   "enable_content_guard": {

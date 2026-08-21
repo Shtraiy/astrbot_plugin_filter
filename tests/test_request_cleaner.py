@@ -178,12 +178,12 @@ def test_on_llm_request_strips_self_media_even_for_text_only_message():
 
     # Bot's own history image is always stripped, even on a plain-text message.
     assert req.contexts[0]["content"] == ""
-    # The self-meme description bridge is kept for text-only references.
-    assert len(req.extra_user_content_parts) == 1
-    assert "<recent_sent_meme>" in req.extra_user_content_parts[0].text
+    # The self-meme description is also stripped: it is appended into the user
+    # message and makes the model think the user just sent a meme.
+    assert req.extra_user_content_parts == []
 
 
-def test_on_llm_request_keeps_recent_meme_bridge_for_text_only_message():
+def test_on_llm_request_strips_recent_meme_bridge_for_text_only_message():
     optimizer = make_optimizer()
     event = FakeEvent("u1", "g:1", "刚才那个表情什么意思", wake=True)
     req = FakeReq(
@@ -205,6 +205,22 @@ def test_on_llm_request_keeps_recent_meme_bridge_for_text_only_message():
     asyncio.run(run())
 
     assert req.contexts[0]["content"] == [{"type": "text", "text": "给你一个"}]
+    assert req.extra_user_content_parts == []
+
+
+def test_on_llm_request_keeps_recent_meme_bridge_when_configured_off():
+    optimizer = make_optimizer(strip_recent_self_meme_context=False)
+    event = FakeEvent("u1", "g:1", "刚才那个表情什么意思", wake=True)
+    req = FakeReq(
+        contexts=[],
+        extra_user_content_parts=[TextPart("<recent_sent_meme>自发表情包</recent_sent_meme>")],
+    )
+
+    async def run():
+        await optimizer.on_llm_request(event, req)
+
+    asyncio.run(run())
+
     assert len(req.extra_user_content_parts) == 1
 
 
