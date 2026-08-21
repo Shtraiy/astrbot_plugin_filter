@@ -6,6 +6,8 @@ from astrbot.api.message_components import Image, Plain
 from main import LanguageLogicOptimizer
 from request_cleaner import (
     append_attribution_note,
+    append_image_text_note,
+    asks_about_image_text,
     asks_about_own_media,
     has_user_media,
     strip_assistant_media,
@@ -144,6 +146,16 @@ def test_asks_about_own_media_detection():
     assert asks_about_own_media("我发给你") is False
 
 
+def test_asks_about_image_text_detection():
+    assert asks_about_image_text("这上面有字吗？？？") is True
+    assert asks_about_image_text("上面写了什么") is True
+    assert asks_about_image_text("这表情包写着什么") is True
+    assert asks_about_image_text("有字吗") is True
+    assert asks_about_image_text("你写的什么") is False
+    assert asks_about_image_text("晚上好") is False
+    assert asks_about_image_text("") is False
+
+
 def test_append_attribution_note_adds_part():
     req = FakeReq(extra_user_content_parts=[])
 
@@ -152,6 +164,16 @@ def test_append_attribution_note_adds_part():
     assert added is True
     assert len(req.extra_user_content_parts) == 1
     assert "attribution_note" in req.extra_user_content_parts[0].text
+
+
+def test_append_image_text_note_adds_part():
+    req = FakeReq(extra_user_content_parts=[])
+
+    added = append_image_text_note(req)
+
+    assert added is True
+    assert len(req.extra_user_content_parts) == 1
+    assert "media_note" in req.extra_user_content_parts[0].text
 
 
 def test_on_llm_request_cleans_context_when_user_sends_image():
@@ -262,6 +284,39 @@ def test_on_llm_request_injects_attribution_note_for_own_media_question():
 def test_on_llm_request_skips_attribution_note_for_normal_message():
     optimizer = make_optimizer()
     event = FakeEvent("u1", "g:1", "晚上好", wake=True)
+    req = FakeReq(extra_user_content_parts=[])
+
+    async def run():
+        await optimizer.on_llm_request(event, req)
+
+    asyncio.run(run())
+
+    assert req.extra_user_content_parts == []
+
+
+def test_on_llm_request_injects_image_text_note_for_text_only_question():
+    optimizer = make_optimizer()
+    event = FakeEvent("u1", "g:1", "这上面有字吗？？？", wake=True)
+    req = FakeReq(extra_user_content_parts=[])
+
+    async def run():
+        await optimizer.on_llm_request(event, req)
+
+    asyncio.run(run())
+
+    assert len(req.extra_user_content_parts) == 1
+    assert "media_note" in req.extra_user_content_parts[0].text
+
+
+def test_on_llm_request_skips_image_text_note_when_user_sent_media():
+    optimizer = make_optimizer()
+    event = FakeEvent(
+        "u1",
+        "g:1",
+        "这上面有字吗？？？",
+        wake=True,
+        chain=[Plain("这上面有字吗？？？"), Image("user.png")],
+    )
     req = FakeReq(extra_user_content_parts=[])
 
     async def run():

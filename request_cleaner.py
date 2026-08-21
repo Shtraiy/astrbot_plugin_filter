@@ -27,6 +27,20 @@ _OWN_MEDIA_QUESTION_HINTS = (
     "音频",
     "语音",
 )
+_IMAGE_REFERENT_HINTS = (
+    "这",
+    "图",
+    "图片",
+    "表情包",
+    "上面",
+    "里面",
+    "图上",
+    "图里",
+    "它",
+    "那张",
+    "这张",
+)
+_IMAGE_TEXT_HINTS = ("字", "写", "文字")
 _ATTRIBUTION_NOTE = (
     "<attribution_note>"
     "用户正在询问自己发送过的内容。请严格按消息角色区分归属："
@@ -34,6 +48,14 @@ _ATTRIBUTION_NOTE = (
     "若用户从未发送过表情包或图片，请如实回答没有发送过，不要描述机器人自己发送的内容。"
     "只有确认用户确实发送过时，才能描述用户发送的那一张。"
     "</attribution_note>"
+)
+_IMAGE_TEXT_NOTE = (
+    "<media_note>"
+    "用户本轮发送的是纯文字消息，不包含任何图片。"
+    "如果用户询问某张图片或图片上的文字，请先确认用户指的是哪一张图；"
+    "不要根据历史消息中机器人自己发送的表情包来回答图片内容，也不要假设用户正在查看某张图片。"
+    "用户未指认具体图片时，请如实说明或请用户发送/指认图片。"
+    "</media_note>"
 )
 
 
@@ -98,12 +120,32 @@ def asks_about_own_media(text: str) -> bool:
     return any(hint in text for hint in _OWN_MEDIA_QUESTION_HINTS)
 
 
+def asks_about_image_text(text: str) -> bool:
+    """Return True for text-only questions like "这上面有字吗" / "写了什么"."""
+    if not (text or ""):
+        return False
+    if "有字" in text:
+        return True
+    has_referent = any(hint in text for hint in _IMAGE_REFERENT_HINTS)
+    has_text_word = any(hint in text for hint in _IMAGE_TEXT_HINTS)
+    return has_referent and has_text_word
+
+
 def append_attribution_note(req: Any) -> bool:
     """Append a role-attribution note to the user message content."""
+    return _append_note_part(req, _ATTRIBUTION_NOTE)
+
+
+def append_image_text_note(req: Any) -> bool:
+    """Append a note clarifying the user sent no image this round."""
+    return _append_note_part(req, _IMAGE_TEXT_NOTE)
+
+
+def _append_note_part(req: Any, note: str) -> bool:
     parts = getattr(req, "extra_user_content_parts", None)
     if not isinstance(parts, list):
         return False
-    part = _make_text_part(_ATTRIBUTION_NOTE)
+    part = _make_text_part(note)
     if part is None:
         return False
     parts.append(part)
