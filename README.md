@@ -2,7 +2,7 @@
 
 # AstrBot 回复优化大师
 
-[![version](https://img.shields.io/badge/version-v2.11.1-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v2.12.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -30,6 +30,7 @@ The cleanup stages are intentionally retained for compatibility.
 - 使用规则或 LLM 优化 AI 味表达。
 - 支持 LLM 智能分段，失败时自动降级到规则分段；编号/项目符号/中文序数等特殊格式直接机械分段，不调用 LLM。
 - 收到唤醒后开启短窗口（默认 6 秒），把同一用户继续发送的分段消息（含图片/文件）合并成一次回复，避免"表情包"和"可爱的表情包"被拆成两次割裂的回复。
+- 用户本轮带图时自动锁定识图目标：剔除历史上下文中机器人自己发送的图片/文件，并移除其它插件注入的上一轮自发表情包描述，避免机器人把自己的表情包当成识图对象。
 - 将常见 Markdown 语法转换为适合 QQ 展示的纯文本。
 - 将分段结果按多条消息发送，并合并重复段落及工具流程叙述中高度相似的段落。
 - 同一群聊内按顺序发送不同用户的完整回复，避免消息交错。
@@ -110,6 +111,9 @@ pip install -r requirements.txt
 | `merge_include_media` | bool | `true` | 是否把窗口内同用户发送的图片/文件一并合并进同一次回复 |
 | `merge_continuation_ttl` | float | `120.0` | 规划期收到的无唤醒词补充暂存时长（秒）；该用户下一次唤醒时并入，`0` 关闭 |
 | `merge_task_cancel` | bool | `false` | 规划中收到同用户新消息时尝试真正取消旧请求任务；依赖 AstrBot 4.25+，旧版本保持关闭 |
+| `protect_user_media_focus` | bool | `true` | 用户本轮发送图片/文件时锁定识图目标；总开关，关闭后不再做请求上下文清洗 |
+| `strip_self_media_from_context` | bool | `true` | 用户带图时，从历史 assistant 消息中剔除机器人自己发送的图片/文件组件 |
+| `strip_recent_self_meme_context` | bool | `true` | 用户带图时，移除 `<recent_sent_meme>` 等上一轮自发表情包描述注入块 |
 | `enable_content_guard` | bool | `true` | 在 LLM 请求前和消息发送前启用内容防护 |
 | `content_guard_mode` | string | `balanced` | `balanced` 拦截明确风险，`strict` 更积极地拦截可疑诱导 |
 | `content_guard_block_terms` | string | 空 | 每行或逗号分隔填写需要拦截的词/短语 |
@@ -136,7 +140,7 @@ pip install Pillow
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m py_compile main.py content_guard.py pipelines.py segmentation.py image_renderer.py outbound_pipeline.py reply_coordinator.py message_dispatcher.py
+python -m py_compile main.py content_guard.py pipelines.py segmentation.py image_renderer.py outbound_pipeline.py reply_coordinator.py message_dispatcher.py merge_window.py request_cleaner.py
 python -m pytest -q
 ```
 
@@ -152,6 +156,7 @@ astrbot_plugin_filter/
 ├── reply_coordinator.py # 全局唤醒队列、回复锁与完成回调
 ├── message_dispatcher.py # 后续分段消息的延迟发送
 ├── merge_window.py      # 分段消息合并窗口：同用户短窗口内合并后续消息
+├── request_cleaner.py   # LLM 请求上下文清洗：用户带图时剔除机器人自身图片/表情包描述
 ├── image_renderer.py    # 列表图片渲染
 ├── _conf_schema.json     # AstrBot 配置项定义
 ├── metadata.yaml         # 插件元数据
@@ -176,6 +181,10 @@ astrbot_plugin_filter/
 
 合并窗口默认开启（`enable_message_merge`）。它只对有人类发送者（sender）的唤醒消息生效，按"会话 + 用户 ID"隔离；窗口期内同一用户的补充**无论带不带唤醒词**都会合并（带唤醒词的后续消息会被停掉自身回复、并入首条），图片/文件在 `merge_include_media`（默认开启）下也会一并合并，引用/转发等其它类型以及以 `merge_ignore_prefixes`（默认 `/`、`!`）开头的消息不参与合并。窗口关闭后、回复生成期间，同用户再 @ 会终止旧规划并合并重生成；不带唤醒词的补充会暂存 `merge_continuation_ttl` 秒，在该用户下一次唤醒时并入。每条消息都会因窗口等待最多 `merge_window_seconds` 秒（默认 6 秒）的延迟。
 
+### 机器人把自己发的表情包当成识图对象
+
+配合表情包插件（如 meme_manager）发送表情包后，如果用户下一轮发送新图片，模型可能把“这张图/这个表情”优先指向机器人上一轮自己发送的表情包。`protect_user_media_focus`（默认开启）会在用户本轮带图时自动做两件事：从历史 assistant 消息中剔除机器人自己发送的图片/文件，并移除其它插件注入的 `<recent_sent_meme>` 描述块，让识图目标锁定在用户自己的图片上。该清洗只在用户消息含图片/文件时触发；用户仅发文字并提及“刚才的表情”时，描述上下文仍会保留，不影响该场景。
+
 ### 群聊内容防护
 
 内容防护在用户请求进入 LLM 前和机器人最终发送前各检查一次。词库配置支持每行一个词或短语，也支持逗号分隔；检测会忽略常见空格、标点、零宽字符和 Unicode 变形。命中高风险内容时，机器人不会复述原文，而是发送中性提示。词库应根据实际群规和运营场景维护，插件不会内置会变化的具体词表。
@@ -186,6 +195,7 @@ astrbot_plugin_filter/
 - **旧版 AstrBot**：4.16 早期版本在丢弃唤醒后仍会短暂占用会话锁并构建 agent（新版已修复），建议升级到较新 4.x。
 - **与内置功能叠加**：AstrBot 自带的"分段回复"会在本插件之后再次处理第一条消息，建议两者只开启一个；第一条分段会带 @/引用，插件直发的后续分段不带，属于预期行为。
 - **合并窗口的终止规划**：窗口关闭后若 bot 已开始生成回复，同用户新消息会终止旧回复并携带合并文本重新生成；在 AstrBot 4.16 上旧请求会继续跑完（token 已消耗、新回复需等会话锁释放），开启 `merge_task_cancel`（需 4.25+）才能真正中断加速。已开始的工具调用或流式输出无法回退。
+- **识图目标清洗为尽力而为**：`protect_user_media_focus` 依赖 `req.contexts`/`req.extra_user_content_parts` 结构（AstrBot 4.24.2+），无法识别的上下文形态会被跳过；若模型仍引用了机器人历史消息中的图片，可尝试升级 AstrBot。
 
 ## 📄 许可证
 
@@ -197,6 +207,11 @@ astrbot_plugin_filter/
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
 
 ## 📝 更新日志
+
+### 2.12.0
+
+- 修复机器人把自己发送的表情包纳入识图范围的问题：用户本轮发送图片/文件时，自动剔除历史上下文中机器人自己发送的图片/文件，并移除 meme_manager 等插件注入的上一轮自发表情包描述（`<recent_sent_meme>`），让识图目标锁定在用户自己的图片上。
+- 新增配置：`protect_user_media_focus`（总开关，默认开启）、`strip_self_media_from_context`、`strip_recent_self_meme_context`。
 
 ### 2.11.1
 
