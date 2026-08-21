@@ -1,8 +1,8 @@
 <div align="center">
 
-# AstrBot 语言逻辑优化大师
+# AstrBot 回复优化大师
 
-[![version](https://img.shields.io/badge/version-v2.10.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v2.11.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -65,7 +65,7 @@ Markdown 纯文本化 -> 按会话串行发送
 
 ### 通过 AstrBot 插件市场
 
-在 AstrBot 管理面板的插件市场中搜索“语言逻辑优化大师”，安装后重启 AstrBot。
+在 AstrBot 管理面板的插件市场中搜索“回复优化大师”，安装后重启 AstrBot。
 
 ### 手动安装
 
@@ -80,7 +80,7 @@ pip install -r requirements.txt
 
 ## ⚙️ 配置
 
-配置入口：`AstrBot 管理面板 -> 插件 -> 语言逻辑优化大师 -> 配置`
+配置入口：`AstrBot 管理面板 -> 插件 -> 回复优化大师 -> 配置`
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | ---: | --- |
@@ -197,6 +197,10 @@ astrbot_plugin_filter/
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
 
 ## 📝 更新日志
+
+### 2.11.0
+
+- 更名：插件显示名由“语言逻辑优化大师”改为“回复优化大师”，更贴合清洗、分段、合并、安全拦截等回复优化能力。
 
 ### 2.10.0
 
