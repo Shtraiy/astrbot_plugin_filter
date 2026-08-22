@@ -31,10 +31,7 @@ from .outbound_pipeline import OutboundTextPipeline
 from .reply_coordinator import GateState as _GateState
 from .reply_coordinator import ReplyCoordinator, ReplySession
 from .request_cleaner import (
-    append_attribution_note,
-    append_image_text_note,
-    asks_about_image_text,
-    asks_about_own_media,
+    append_text_only_media_note,
     count_assistant_media,
     describe_contexts,
     has_user_media,
@@ -181,7 +178,7 @@ class LanguageLogicOptimizer(Star):
         if not await self._get_reply_coordinator().admit_wakeup(event):
             return
         self._clean_media_focus_context(event, req)
-        self._guard_media_question_context(event, req)
+        self._guard_text_only_attribution(event, req)
         if not self._get_config("enable_content_guard", True):
             return
 
@@ -240,34 +237,25 @@ class LanguageLogicOptimizer(Star):
                 removed_meme,
             )
 
-    def _guard_media_question_context(self, event: AstrMessageEvent, req) -> None:
-        """Correct media attribution for text-only questions.
+    def _guard_text_only_attribution(self, event: AstrMessageEvent, req) -> None:
+        """Keep the model from attributing the bot's own media to the user.
 
-        Memories and history text can make the model attribute the bot's own
-        memes to the user, or answer image questions from the bot's own past
-        memes. For "我发了什么/我发过吗" questions append a role note; for
-        text-only image-text questions ("这上面有字吗") append a note clarifying
-        that the user sent no image this round.
+        For every text-only user message, append a note clarifying that the
+        user sent no image this round and that images in history belong to
+        their sender role. This counters memory/history text that claims the
+        user sent memes the bot actually sent itself.
         """
         if not self._get_config("guard_own_media_attribution", True):
             return
         if req is None:
             return
-        text = str(getattr(event, "message_str", "") or "")
         try:
-            if asks_about_own_media(text) and append_attribution_note(req):
-                logger.info("[请求清洗] 检测到'我发了什么'类提问，已注入消息归属提示")
-                return
             try:
                 user_has_media = has_user_media(event)
             except Exception:
                 user_has_media = False
-            if (
-                not user_has_media
-                and asks_about_image_text(text)
-                and append_image_text_note(req)
-            ):
-                logger.info("[请求清洗] 纯文字询问图片文字，已注入图片归属提示")
+            if not user_has_media and append_text_only_media_note(req):
+                logger.info("[请求清洗] 纯文字消息，已注入图片归属提示")
         except Exception:
             logger.debug("[请求清洗] 消息归属提示注入失败", exc_info=True)
 

@@ -2,7 +2,7 @@
 
 # AstrBot 回复优化大师
 
-[![version](https://img.shields.io/badge/version-v2.13.3-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v2.13.4-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -127,7 +127,7 @@ pip install -r requirements.txt
 | `protect_user_media_focus` | bool | `true` | 请求上下文清洗总开关：每次请求剔除机器人自己历史消息里的图片/文件，并移除自发表情包描述 |
 | `strip_self_media_from_context` | bool | `true` | 每次请求都从历史 assistant 消息中剔除机器人自己发送的图片/文件组件 |
 | `strip_recent_self_meme_context` | bool | `true` | 每次请求都移除 `<recent_sent_meme>` 等上一轮自发表情包描述注入块；若需要保留以便用户纯文字追问“刚才的表情”，可关闭 |
-| `guard_own_media_attribution` | bool | `true` | 用户询问“我发了什么/我发过吗”或纯文字询问图片文字（“这上面有字吗”）时，注入消息归属提示，避免模型把机器人自己的表情包当成用户发的或据此作答 |
+| `guard_own_media_attribution` | bool | `true` | 用户消息为纯文字时，注入图片归属提示：用户本轮未发图、历史中的图片属于各自发送者，避免模型把机器人自己的表情包当成用户发的 |
 | `onboarding_guard_minutes` | float | `30.0` | 新群聊严格防护的持续时间，单位为分钟 |
 | `onboarding_guard_messages` | int | `20` | 新群聊严格防护覆盖的 LLM 请求次数 |
 
@@ -218,6 +218,10 @@ astrbot_plugin_filter/
 - 仓库：[astrbot_plugin_filter](https://github.com/Shtraiy/astrbot_plugin_filter)
 
 ## 📝 更新日志
+
+### 2.13.4
+
+- 归属提示改为对所有纯文字用户消息生效：不再只匹配“我发了什么/这上面有字吗”等特定问法，而是每条纯文字消息都注入“用户本轮未发送图片、历史图片属于各自发送者、记忆/历史中声称用户发过图的内容可能是机器人自己的误判”的提示，全面防止机器人把自己的表情包归为用户发送。
 
 ### 2.13.3
 
