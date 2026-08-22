@@ -260,10 +260,22 @@ class LanguageLogicOptimizer(Star):
             return
         try:
             if self._get_reply_coordinator().discard_superseded_result(event):
+                self._get_message_merger().clear_owner(event)
                 return
-            self._get_message_merger().clear_owner(event)
             result = event.get_result()
             chain = getattr(result, "chain", None)
+            origin = getattr(event, "unified_msg_origin", None)
+            if origin and result is not None:
+                text = _result_plain_text(result)
+                if text and self._get_self_reply_marker().recently_sent_duplicate(
+                    origin, text
+                ):
+                    logger.info("[消息合并] 检测到重复回复，丢弃避免复读")
+                    if chain is not None:
+                        chain[:] = []
+                    self._get_message_merger().clear_owner(event)
+                    return
+            self._get_message_merger().clear_owner(event)
             if chain:
                 for comp in chain:
                     if isinstance(comp, Plain) and comp.text:
@@ -440,6 +452,27 @@ def _event_is_stopped(event) -> bool:
 def _strip_structure_tags(text: str) -> str:
     """Remove stray quote/blockquote structure tags echoed by the model."""
     return re.sub(r"</?(?:blockquote|quote)\s*>", "", text or "").strip()
+
+
+def _result_plain_text(result) -> str:
+    """Best-effort plain-text extraction from a MessageEventResult-like object."""
+    getter = getattr(result, "get_plain_text", None)
+    if callable(getter):
+        try:
+            text = getter()
+            if isinstance(text, str):
+                return text.strip()
+        except Exception:
+            pass
+    chain = getattr(result, "chain", None)
+    if isinstance(chain, list):
+        parts = [
+            getattr(comp, "text", "") or ""
+            for comp in chain
+            if isinstance(comp, Plain)
+        ]
+        return " ".join(parts).strip()
+    return ""
 
 
 def _read_config_value(source, key: str, default):

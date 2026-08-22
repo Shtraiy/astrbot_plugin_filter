@@ -409,6 +409,38 @@ def test_decoration_strips_structure_tags():
     assert result.chain[0].text == "原来是这样呀 [图片]"
 
 
+def test_decoration_drops_duplicate_reply_just_sent():
+    optimizer = make_optimizer()
+    marker = optimizer._get_self_reply_marker()
+    sent = FakeEvent("u1", "group:1")
+    sent.set_result(SimpleNamespace(chain=[Plain("那张脸P得也太违和了")]))
+    marker.record_sent_reply(sent)
+
+    result = SimpleNamespace(chain=[Plain("那张脸P得也太违和了")])
+    event = FakeEvent("u1", "group:1", wake=True)
+    event.set_result(result)
+
+    asyncio.run(optimizer.on_decorating_result(event))
+
+    assert result.chain == []
+
+
+def test_decoration_keeps_new_reply_text():
+    optimizer = make_optimizer()
+    marker = optimizer._get_self_reply_marker()
+    sent = FakeEvent("u1", "group:1")
+    sent.set_result(SimpleNamespace(chain=[Plain("旧回复")]))
+    marker.record_sent_reply(sent)
+
+    result = SimpleNamespace(chain=[Plain("新回复内容")])
+    event = FakeEvent("u1", "group:1", wake=True)
+    event.set_result(result)
+
+    asyncio.run(optimizer.on_decorating_result(event))
+
+    assert result.chain[0].text == "新回复内容"
+
+
 def test_strip_structure_tags_handles_both_tags():
     assert _strip_structure_tags("<blockquote>引用</blockquote> 内容") == "引用 内容"
     assert _strip_structure_tags("正常文本") == "正常文本"

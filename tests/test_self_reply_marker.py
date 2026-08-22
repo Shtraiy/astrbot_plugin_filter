@@ -104,6 +104,43 @@ def test_mark_disabled_by_config():
     assert marker.mark_own_recent_replies(req, event) is False
 
 
+def test_recently_sent_duplicate_detects_same_text_within_window():
+    clock = {"now": 1000.0}
+    marker = make_marker(minutes=5, now=lambda: clock["now"])
+    event = FakeEvent("u1", "group:1")
+    event.set_result(SimpleNamespace(chain=[Plain("那张脸P得也太违和了")]))
+    marker.record_sent_reply(event)
+
+    assert (
+        marker.recently_sent_duplicate("group:1", "那张脸P得也太违和了") is True
+    )
+    assert (
+        marker.recently_sent_duplicate("group:1", "完全不同的内容") is False
+    )
+
+
+def test_recently_sent_duplicate_expires_after_window():
+    clock = {"now": 1000.0}
+    marker = make_marker(minutes=5, now=lambda: clock["now"])
+    event = FakeEvent("u1", "group:1")
+    event.set_result(SimpleNamespace(chain=[Plain("重复文本")]))
+    marker.record_sent_reply(event)
+
+    clock["now"] += 16
+
+    assert marker.recently_sent_duplicate("group:1", "重复文本") is False
+
+
+def test_recently_sent_duplicate_isolated_by_session():
+    clock = {"now": 1000.0}
+    marker = make_marker(minutes=5, now=lambda: clock["now"])
+    event = FakeEvent("u1", "group:1")
+    event.set_result(SimpleNamespace(chain=[Plain("重复文本")]))
+    marker.record_sent_reply(event)
+
+    assert marker.recently_sent_duplicate("group:2", "重复文本") is False
+
+
 def test_zero_window_disables_recording():
     marker = make_marker(minutes=0)
     event = FakeEvent("u1", "group:1")

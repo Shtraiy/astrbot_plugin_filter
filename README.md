@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.6-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.7-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -24,6 +24,7 @@
 - 窗口期内**带不带唤醒词**都会合并；群聊里不带 @ 的补充消息也会在规划期被自动提升并合并重生成。
 - 规划期状态带 60 秒 TTL，过期自动作废——不会把很久以后的无唤醒消息误判成"补充"而唤醒 bot。
 - AstrBot 4.25+：规划期新消息会通过 `active_event_registry` 真正停止旧 Agent 运行，避开 AstrBot 4.27 自带 follow-up 捕获的抢占，确保"终止旧规划 + 合并重生成"生效。
+- 发送级防复读：同一会话在极短时间（15 秒）内装饰出完全相同文本时自动丢弃，兼容 AstrBot 4.27 的二次装饰/发送路径（其内置去重对带图片的消息链不生效）。
 - 图片/文件消息随文本一并合并（引用、转发等不参与）。
 - 合并时若旧回复已在生成：终止旧规划、合并文本重新生成，旧回复不会发送、不会写入 AstrBot 历史，也不会被 livingmemory 记录。
 - 按会话独立：不同会话可并行回复，互不排队、无全局闸门。
@@ -113,6 +114,9 @@
 **AstrBot 4.27 上，发图没唤醒却被回复，或连续 @ 却回了好几条？**
 4.27 有两个新行为：自带 follow-up 捕获会在我们的合并逻辑之前截走同用户消息；历史残留的规划状态可能把后来的无唤醒消息误提升。v3.0.6 起：规划状态 60 秒过期自动作废；规划期新消息通过 `active_event_registry` 真正停止旧 Agent，让合并重生成接管。
 
+**为什么同样的回复会被发送两遍（复读）？**
+AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 respond 内置去重只对纯文本链生效，回复一旦带上 meme 图片就失效）。v3.0.7 起，插件在装饰阶段做发送级去重：同一会话 15 秒内出现完全相同的回复文本时直接丢弃，避免复读。
+
 **群聊里不带 @ 的补充消息能合并吗？**
 能。窗口期直接并入；规划期会被自动提升为唤醒并合并重生成。其他用户的发言不会触发。
 
@@ -120,6 +124,10 @@
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.7
+
+- **修复**：AstrBot 4.27 二次装饰/发送导致的复读——新增发送级文本去重（同一会话 15 秒内完全相同文本丢弃）；`SelfReplyMarker` 增加 `recently_sent_duplicate`。
 
 ### v3.0.6
 

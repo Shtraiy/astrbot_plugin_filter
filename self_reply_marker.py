@@ -106,6 +106,33 @@ class SelfReplyMarker:
         block = self._build_mark_block(queue)
         return self._append_temp_part(req, block)
 
+    def recently_sent_duplicate(
+        self,
+        origin: str,
+        text: str,
+        *,
+        within_seconds: float = 15.0,
+    ) -> bool:
+        """True when the same plain text was just sent for this session.
+
+        Used as a send-level dedupe guard for AstrBot 4.27 pipelines that can
+        decorate/send the same reply twice.
+        """
+        if not origin or not text:
+            return False
+        self._prune(origin)
+        queue = self._entries.get(origin)
+        if not queue:
+            return False
+        now = self._now()
+        needle = " ".join(text.split())
+        for entry in queue:
+            if now - entry.timestamp > within_seconds:
+                continue
+            if " ".join(entry.text.split()) == needle:
+                return True
+        return False
+
     def _enabled(self) -> bool:
         return bool(self._get_config("enable_self_reply_mark", True))
 
