@@ -257,6 +257,17 @@ class MergeWindowManager:
         )
         return True
 
+    def sync_pending_text(self, event: Any, text: str) -> None:
+        """Sync a post-finalize rewrite (e.g. media-only placeholder) back into
+        the planning state so later take_planning merges see the new text."""
+        key = self.user_key(event)
+        if key is None:
+            return
+        state = self._states.get(key)
+        if state is None or state.owner_event is not event:
+            return
+        state.pending_text = str(text or "").strip()
+
     def clear_owner(self, event: Any) -> None:
         """Drop the state once the owner's reply is decorated or sent."""
         key = self.user_key(event)
@@ -266,6 +277,11 @@ class MergeWindowManager:
         if state is None or state.owner_event is not event:
             return
         self._states.pop(key, None)
+
+    @classmethod
+    def has_media(cls, event: Any) -> bool:
+        """Return True when the event's message chain carries image/file media."""
+        return bool(cls._owner_media(event))
 
     def _extract_merge_payload(self, event: Any) -> tuple[str, list[Any]] | None:
         """Return (text, media_components) when the message is mergeable."""

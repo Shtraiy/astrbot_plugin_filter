@@ -28,6 +28,7 @@ from .self_reply_marker import (
 
 
 MAX_ONBOARDING_STATES = 4096
+MEDIA_ONLY_PROMPT = "用户发送了一张图片/文件，请识别内容并回应。"
 
 
 @dataclass
@@ -120,6 +121,8 @@ class LanguageLogicOptimizer(Star):
                     str(getattr(event, "message_str", "") or ""),
                 )
                 merger.attach_media(event, earlier_media)
+                if not (event.message_str or "").strip() and merger.has_media(event):
+                    event.message_str = MEDIA_ONLY_PROMPT
                 if not await coordinator.admit_wakeup(event):
                     return
                 merger.rearm_planning(
@@ -137,7 +140,11 @@ class LanguageLogicOptimizer(Star):
                 try:
                     await asyncio.sleep(self._get_merge_window_seconds())
                 finally:
-                    event.message_str = merger.finalize_window(event)
+                    merged = merger.finalize_window(event)
+                    if not (merged or "").strip() and merger.has_media(event):
+                        merged = MEDIA_ONLY_PROMPT
+                    event.message_str = merged
+                    merger.sync_pending_text(event, merged)
 
     @_event_filter.on_llm_request(priority=1000)
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:

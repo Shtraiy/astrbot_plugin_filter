@@ -233,3 +233,21 @@ def test_join_text_strips_leading_mention():
     assert manager.join_text("第一段", "@bot 第二段") == "第一段\n第二段"
     assert manager.join_text("第一段", "第二段") == "第一段\n第二段"
     assert manager.join_text("", "第二段") == "第二段"
+
+
+def test_has_media_detects_image_components():
+    manager = make_manager()
+
+    assert manager.has_media(FakeEvent("u1", "group:1", "文字")) is False
+    assert (
+        manager.has_media(
+            FakeEvent("u1", "group:1", chain=[Image("file:///a.png")])
+        )
+        is True
+    )
+    assert (
+        manager.has_media(
+            FakeEvent("u1", "group:1", chain=[Plain("文字"), File("a.xlsx")])
+        )
+        is True
+    )

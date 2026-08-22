@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from astrbot.api.message_components import Image, Plain
 
-from main import LanguageLogicOptimizer
+from main import MEDIA_ONLY_PROMPT, LanguageLogicOptimizer
 
 
 class FakeContext:
@@ -247,6 +247,68 @@ def test_user_media_message_gets_attribution_note():
     texts = [getattr(part, "text", "") for part in req.extra_user_content_parts]
     assert any("用户本轮发送了图片/文件" in text for text in texts)
     assert not any("用户本条消息为纯文字" in text for text in texts)
+
+
+def test_media_only_message_gets_recognition_prompt_after_window():
+    optimizer = make_optimizer()
+    event = FakeEvent(
+        "u1",
+        "group:1",
+        text="",
+        chain=[Image("file:///user.png")],
+        wake=True,
+    )
+
+    asyncio.run(optimizer.on_waiting_llm_request(event))
+
+    assert event.message_str == MEDIA_ONLY_PROMPT
+
+
+def test_media_only_supplement_gets_recognition_prompt_during_planning():
+    optimizer = make_optimizer()
+    old = FakeEvent(
+        "u1",
+        "group:1",
+        text="",
+        chain=[Image("file:///old.png")],
+        wake=True,
+    )
+    new = FakeEvent(
+        "u1",
+        "group:1",
+        "补充",
+        wake=True,
+    )
+
+    async def run():
+        await optimizer.on_waiting_llm_request(old)
+        await optimizer.on_waiting_llm_request(new)
+        return new.message_str
+
+    merged = asyncio.run(run())
+
+    assert merged == f"{MEDIA_ONLY_PROMPT}\n补充"
+
+
+def test_media_supplement_keeps_existing_text_without_placeholder():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    new = FakeEvent(
+        "u1",
+        "group:1",
+        text="",
+        chain=[Image("file:///new.png")],
+        wake=True,
+    )
+
+    async def run():
+        await optimizer.on_waiting_llm_request(old)
+        await optimizer.on_waiting_llm_request(new)
+        return new.message_str
+
+    merged = asyncio.run(run())
+
+    assert merged == "第一段"
 
 
 def test_superseded_result_discarded_on_decoration():
