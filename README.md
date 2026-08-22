@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.5-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.6-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -22,6 +22,8 @@
 - 纯图片/文件消息（无文字）在窗口结束后自动补充识图提示（"用户发送了一张图片/文件，请识别内容并回应"），保证模型聚焦当前附件而不是历史里机器人自己发的图。
 - "先发图、再引用该图并 @bot 提问"的场景：窗口期收到带引用的唤醒消息时自动取消纯图窗口（不会重复回复），由 AstrBot 原生处理引用图。
 - 窗口期内**带不带唤醒词**都会合并；群聊里不带 @ 的补充消息也会在规划期被自动提升并合并重生成。
+- 规划期状态带 60 秒 TTL，过期自动作废——不会把很久以后的无唤醒消息误判成"补充"而唤醒 bot。
+- AstrBot 4.25+：规划期新消息会通过 `active_event_registry` 真正停止旧 Agent 运行，避开 AstrBot 4.27 自带 follow-up 捕获的抢占，确保"终止旧规划 + 合并重生成"生效。
 - 图片/文件消息随文本一并合并（引用、转发等不参与）。
 - 合并时若旧回复已在生成：终止旧规划、合并文本重新生成，旧回复不会发送、不会写入 AstrBot 历史，也不会被 livingmemory 记录。
 - 按会话独立：不同会话可并行回复，互不排队、无全局闸门。
@@ -108,6 +110,9 @@
 **我"先发一张图、再引用它并 @bot 提问"，为什么有时会收到两条回复？**
 私聊里第一条纯图会触发合并窗口，带引用的第二条因含引用组件无法被合并，旧版本会让两条消息各自触发一次 LLM。v3.0.4 起，窗口期收到带引用的唤醒消息会自动取消纯图窗口并只让引用消息走一次请求，引用图由 AstrBot 原生处理。
 
+**AstrBot 4.27 上，发图没唤醒却被回复，或连续 @ 却回了好几条？**
+4.27 有两个新行为：自带 follow-up 捕获会在我们的合并逻辑之前截走同用户消息；历史残留的规划状态可能把后来的无唤醒消息误提升。v3.0.6 起：规划状态 60 秒过期自动作废；规划期新消息通过 `active_event_registry` 真正停止旧 Agent，让合并重生成接管。
+
 **群聊里不带 @ 的补充消息能合并吗？**
 能。窗口期直接并入；规划期会被自动提升为唤醒并合并重生成。其他用户的发言不会触发。
 
@@ -115,6 +120,11 @@
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.6
+
+- **修复**：规划期状态残留导致的无唤醒消息误唤醒（TTL 默认 60 秒，可配 `merge_planning_ttl`）。
+- **适配 AstrBot 4.27**：规划期新消息先调用 `active_event_registry.request_agent_stop_all` 停止旧 Agent（并置 `agent_stop_requested` 避开 4.27 follow-up 捕获），再走合并重生成；4.16 上自动跳过、行为不变。
 
 ### v3.0.5
 

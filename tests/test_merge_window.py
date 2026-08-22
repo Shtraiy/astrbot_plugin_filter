@@ -285,3 +285,50 @@ def test_cancel_window_requires_window_phase():
     manager.finalize_window(owner)
 
     assert manager.cancel_window(FakeEvent("u1", "group:1", "x", wake=True)) is None
+
+
+def test_planning_state_expires_after_ttl():
+    clock = {"t": 1000.0}
+    manager = make_manager(merge_planning_ttl=60, now=lambda: clock["t"])
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+    manager.finalize_window(owner)
+    follow = FakeEvent("u1", "group:1", "补充", wake=False)
+
+    assert manager.planning_active(follow) is True
+
+    clock["t"] += 61
+
+    assert manager.planning_active(follow) is False
+    assert manager.promote_planning(follow) is False
+    assert manager.take_planning(follow) is None
+
+
+def test_rearm_planning_resets_ttl():
+    clock = {"t": 1000.0}
+    manager = make_manager(merge_planning_ttl=60, now=lambda: clock["t"])
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+    manager.finalize_window(owner)
+    follow = FakeEvent("u1", "group:1", "补充", wake=True)
+
+    clock["t"] += 30
+    assert manager.rearm_planning(follow, "第一段\n补充")
+
+    clock["t"] += 30  # 距 rearm 30 秒，未过期
+    assert manager.planning_active(follow) is True
+
+    clock["t"] += 31  # 距 rearm 61 秒，过期
+    assert manager.planning_active(follow) is False
+
+
+def test_planning_ttl_zero_disables_expiry():
+    clock = {"t": 1000.0}
+    manager = make_manager(merge_planning_ttl=0, now=lambda: clock["t"])
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+    manager.finalize_window(owner)
+
+    clock["t"] += 9999
+
+    assert manager.planning_active(FakeEvent("u1", "group:1", "x", wake=False)) is True

@@ -32,6 +32,7 @@ class _MergeState:
     captured_events: set[Any] = field(default_factory=set)
     captured_count: int = 0
     pipeline_task: Any = None
+    planning_started_at: float = 0.0
 
 
 class MergeWindowManager:
@@ -113,6 +114,19 @@ class MergeWindowManager:
             and state.phase == "window"
             and state.owner_event is not event
         )
+
+    def planning_active(self, event: Any) -> bool:
+        """True when this user has a fresh (unexpired) planning state."""
+        key = self.user_key(event)
+        if key is None:
+            return False
+        state = self._states.get(key)
+        if state is None or state.phase != "planning":
+            return False
+        if self._planning_expired(state):
+            self._states.pop(key, None)
+            return False
+        return True
 
     @classmethod
     def message_has_quote(cls, event: Any) -> bool:
@@ -209,6 +223,9 @@ class MergeWindowManager:
         state = self._states.get(key)
         if state is None or state.phase != "planning":
             return False
+        if self._planning_expired(state):
+            self._states.pop(key, None)
+            return False
         if state.owner_event is event or event in state.captured_events:
             return False
         if self._event_will_call_llm(event):
@@ -241,6 +258,7 @@ class MergeWindowManager:
         self.attach_media(event, state.pending_media)
         state.pending_media = []
         state.phase = "planning"
+        state.planning_started_at = self._now()
         state.captured_events.clear()
         return merged
 
@@ -251,6 +269,9 @@ class MergeWindowManager:
             return None
         state = self._states.get(key)
         if state is None or state.phase != "planning":
+            return None
+        if self._planning_expired(state):
+            self._states.pop(key, None)
             return None
         self._states.pop(key, None)
         media = self._owner_media(state.owner_event)
@@ -280,6 +301,7 @@ class MergeWindowManager:
             phase="planning",
             pending_text=str(merged_text or "").strip(),
             pipeline_task=pipeline_task,
+            planning_started_at=self._now(),
         )
         return True
 
@@ -400,6 +422,17 @@ class MergeWindowManager:
             return max(0, int(self._get_config("merge_max_chars", 2000)))
         except (TypeError, ValueError):
             return 2000
+
+    def _planning_ttl(self) -> float:
+        try:
+            value = float(self._get_config("merge_planning_ttl", 60.0))
+        except (TypeError, ValueError):
+            return 60.0
+        return max(0.0, value)
+
+    def _planning_expired(self, state: _MergeState) -> bool:
+        ttl = self._planning_ttl()
+        return ttl > 0 and self._now() - state.planning_started_at > ttl
 
 
 __all__ = ["MAX_MERGE_STATES", "MergeWindowManager"]

@@ -366,6 +366,26 @@ def test_plain_wake_followup_still_merges_during_window():
     assert stopped is True
 
 
+def test_expired_planning_does_not_promote_later_media_message():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # 窗口 sleep 打桩 0 → planning
+    merger = optimizer._get_message_merger()
+    key = merger.user_key(old)
+    merger._states[key].planning_started_at = 0.0  # 强制过期
+
+    img = FakeEvent(
+        "u1",
+        "group:1",
+        text="",
+        chain=[Image("file:///x.png")],
+        wake=False,
+    )
+    asyncio.run(optimizer.on_message(img))
+
+    assert img.is_at_or_wake_command is False
+
+
 def test_superseded_result_discarded_on_decoration():
     optimizer = make_optimizer()
     event = FakeEvent("u1", "group:1", "旧", wake=True)

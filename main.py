@@ -83,6 +83,10 @@ class LanguageLogicOptimizer(Star):
             if merger.is_window_open(event):
                 merger.capture(event)
                 return
+            if merger.planning_active(event):
+                # AstrBot 4.25+: stop the running agent before follow-up
+                # capture or our own hooks can race with the old planning.
+                self._request_agent_stop(event)
             if merger.promote_planning(event):
                 logger.info("[消息合并] 规划期补充消息已提升为唤醒，将合并重生成")
         except Exception:
@@ -120,6 +124,7 @@ class LanguageLogicOptimizer(Star):
             if pending is not None:
                 old_event, earlier_text, earlier_media, pipeline_task = pending
                 if old_event is not None:
+                    self._request_agent_stop(event)
                     coordinator.supersede_active_event(old_event)
                     if (
                         self._get_config("merge_task_cancel", False)
@@ -305,6 +310,27 @@ class LanguageLogicOptimizer(Star):
             except Exception:
                 return True
         return True
+
+    def _request_agent_stop(self, event: AstrMessageEvent) -> None:
+        """AstrBot 4.25+: request real cancellation of the session's running agent.
+
+        Also sets ``agent_stop_requested`` on the old event, which makes
+        AstrBot 4.27's follow-up capture skip it so the merged regeneration
+        can proceed through the normal pipeline. No-op on older AstrBot.
+        """
+        origin = getattr(event, "unified_msg_origin", None)
+        if not origin:
+            return
+        try:
+            from astrbot.core.utils.active_event_registry import (
+                active_event_registry,
+            )
+        except Exception:
+            return
+        try:
+            active_event_registry.request_agent_stop_all(origin, exclude=event)
+        except Exception:
+            logger.debug("[消息合并] 请求停止旧 Agent 失败", exc_info=True)
 
     def _get_guard_terms(self) -> list[str]:
         return parse_terms(self._get_config("content_guard_block_terms", ""))

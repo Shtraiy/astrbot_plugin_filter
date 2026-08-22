@@ -73,6 +73,7 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(schema["merge_ignore_prefixes"]["default"], "/,!")
         self.assertEqual(schema["merge_include_media"]["default"], True)
         self.assertEqual(schema["merge_task_cancel"]["default"], False)
+        self.assertEqual(schema["merge_planning_ttl"]["default"], 60.0)
 
     def test_self_reply_mark_defaults(self):
         schema = self._schema()

@@ -47,6 +47,13 @@
     "default": false,
     "invisible": true
   },
+  "merge_planning_ttl": {
+    "description": "规划期状态保留时长（秒）",
+    "type": "float",
+    "hint": "窗口关闭后，合并状态只在该时长内有效，超过后自动作废，避免残留状态把后来的无唤醒消息误判为补充；设为 0 表示不限制。",
+    "default": 60.0,
+    "invisible": true
+  },
   "enable_self_reply_mark": {
     "description": "启用 bot 自回复归属标记",
     "type": "bool",
