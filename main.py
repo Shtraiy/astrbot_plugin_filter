@@ -18,7 +18,9 @@ from .merge_window import MergeWindowManager
 from .reply_coordinator import ReplyCoordinator
 from .self_reply_marker import (
     SelfReplyMarker,
+    append_referenced_image_note,
     append_text_only_media_note,
+    has_referenced_image,
     has_user_media,
     strip_recent_self_meme_context,
 )
@@ -181,8 +183,17 @@ class LanguageLogicOptimizer(Star):
                     user_has_media = has_user_media(event)
                 except Exception:
                     user_has_media = False
-                if not user_has_media and append_text_only_media_note(req):
-                    logger.info("[自回复标记] 纯文字消息，已注入图片归属提示")
+                if user_has_media:
+                    pass
+                else:
+                    try:
+                        user_has_ref_image = has_referenced_image(event)
+                    except Exception:
+                        user_has_ref_image = False
+                    if user_has_ref_image and append_referenced_image_note(req):
+                        logger.info("[自回复标记] 引用图片消息，已注入识图提示")
+                    elif append_text_only_media_note(req):
+                        logger.info("[自回复标记] 纯文字消息，已注入图片归属提示")
         except Exception:
             logger.debug("[自回复标记] 标记注入失败", exc_info=True)
 

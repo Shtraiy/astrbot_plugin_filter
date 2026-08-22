@@ -32,6 +32,14 @@ _TEXT_ONLY_MEDIA_NOTE = (
     "除非用户本轮实际发送了图片，否则不要把机器人自己的图片归为用户发送，也不要描述成用户发送的。"
     "</media_note>"
 )
+_REFERENCED_IMAGE_NOTE = (
+    "<referenced_image_note>"
+    "用户引用了一张历史消息中的图片，这是用户当前询问的对象。"
+    "请识别并分析这张图片的内容，用自然语言回答用户的问题。"
+    "如果该图片是机器人自己之前发送的，回答时可以说明'这是我之前发的图'，"
+    "但不要声称用户刚刚发送了它。"
+    "</referenced_image_note>"
+)
 
 
 @dataclass
@@ -130,6 +138,10 @@ class SelfReplyMarker:
         lines.append(
             "任何记忆、总结或历史中声称'用户发送过图片/表情包'的内容若与本标记冲突，以本标记为准。"
         )
+        lines.append(
+            "用户引用历史消息中的图片提问时，该图片是用户当前询问的对象"
+            "（即使它是机器人自己之前发送的），需要识别分析。"
+        )
         lines.append("</self_reply_mark>")
         return "\n".join(lines)
 
@@ -172,6 +184,39 @@ def has_user_media(event: Any) -> bool:
     return any(_is_media_part(comp) for comp in chain)
 
 
+def has_referenced_image(event: Any) -> bool:
+    """Return True when the message quotes a historical message that includes an image."""
+    chain = getattr(getattr(event, "message_obj", None), "message", None)
+    if chain is None:
+        getter = getattr(event, "get_messages", None)
+        if callable(getter):
+            try:
+                chain = getter()
+            except Exception:
+                chain = None
+    if not chain:
+        return False
+    for comp in chain:
+        if not _is_reply_component(comp):
+            continue
+        reply_chain = getattr(comp, "chain", None)
+        if isinstance(reply_chain, list) and any(
+            _is_media_part(item) for item in reply_chain
+        ):
+            return True
+        message_str = str(getattr(comp, "message_str", "") or "")
+        if "图片" in message_str or "[Image]" in message_str or "[图片]" in message_str:
+            return True
+    return False
+
+
+def _is_reply_component(comp: Any) -> bool:
+    name = type(comp).__name__.casefold()
+    if "reply" in name:
+        return True
+    return "reply" in str(getattr(comp, "type", "") or "").casefold()
+
+
 def describe_contexts(req: Any) -> str:
     """Compact structural summary of the request history for diagnostics."""
     contexts = _request_contexts(req)
@@ -202,6 +247,11 @@ def strip_recent_self_meme_context(req: Any) -> int:
 def append_text_only_media_note(req: Any) -> bool:
     """Append a note clarifying that a text-only message carries no image."""
     return _append_note_part(req, _TEXT_ONLY_MEDIA_NOTE)
+
+
+def append_referenced_image_note(req: Any) -> bool:
+    """Append a note telling the model that a quoted image is the question target."""
+    return _append_note_part(req, _REFERENCED_IMAGE_NOTE)
 
 
 def _append_note_part(req: Any, note: str) -> bool:
@@ -288,7 +338,9 @@ __all__ = [
     "MAX_MARK_STATES",
     "SelfReplyMarker",
     "append_text_only_media_note",
+    "append_referenced_image_note",
     "describe_contexts",
+    "has_referenced_image",
     "has_user_media",
     "strip_recent_self_meme_context",
 ]

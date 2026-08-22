@@ -4,7 +4,9 @@ from astrbot.api.message_components import File, Image, Plain
 
 from _astrbot_plugin_filter_test.self_reply_marker import (
     SelfReplyMarker,
+    append_referenced_image_note,
     append_text_only_media_note,
+    has_referenced_image,
     has_user_media,
     strip_recent_self_meme_context,
 )
@@ -156,3 +158,43 @@ def test_has_user_media_detects_media_components():
         )
         is True
     )
+
+
+def test_has_referenced_image_detects_quoted_image_chain():
+    quote = SimpleNamespace(
+        type="Reply",
+        chain=[Plain("旧消息"), Image("file:///quoted.png")],
+        message_str="旧消息",
+    )
+    event = FakeEvent("u1", "group:1", chain=[quote, Plain("这个图是什么意思")])
+
+    assert has_referenced_image(event) is True
+
+
+def test_has_referenced_image_detects_image_placeholder_text():
+    quote = SimpleNamespace(
+        type="Reply",
+        chain=[],
+        message_str="[图片]",
+    )
+    event = FakeEvent("u1", "group:1", chain=[quote, Plain("这个图是什么意思")])
+
+    assert has_referenced_image(event) is True
+
+
+def test_has_referenced_image_false_for_plain_quote():
+    quote = SimpleNamespace(
+        type="Reply",
+        chain=[Plain("旧消息")],
+        message_str="旧消息",
+    )
+    event = FakeEvent("u1", "group:1", chain=[quote, Plain("接着说")])
+
+    assert has_referenced_image(event) is False
+
+
+def test_append_referenced_image_note():
+    req = SimpleNamespace(extra_user_content_parts=[])
+
+    assert append_referenced_image_note(req) is True
+    assert "用户引用了一张历史消息中的图片" in req.extra_user_content_parts[0].text

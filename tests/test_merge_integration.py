@@ -209,6 +209,26 @@ def test_self_reply_mark_injected_on_llm_request():
     assert injected is True
 
 
+def test_quoted_image_message_gets_recognition_note_not_text_only_note():
+    optimizer = make_optimizer()
+    event = FakeEvent(
+        "u1",
+        "group:1",
+        chain=[SimpleNamespace(type="Reply", chain=[Image("file:///q.png")], message_str="[图片]"), Plain("这个图是什么意思")],
+        wake=True,
+    )
+    req = SimpleNamespace(
+        prompt="这个图是什么意思",
+        extra_user_content_parts=[],
+    )
+
+    asyncio.run(optimizer.on_llm_request(event, req))
+
+    texts = [getattr(part, "text", "") for part in req.extra_user_content_parts]
+    assert any("用户引用了一张历史消息中的图片" in text for text in texts)
+    assert not any("用户本条消息为纯文字" in text for text in texts)
+
+
 def test_superseded_result_discarded_on_decoration():
     optimizer = make_optimizer()
     event = FakeEvent("u1", "group:1", "旧", wake=True)
