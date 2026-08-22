@@ -34,8 +34,9 @@ _TEXT_ONLY_MEDIA_NOTE = (
 )
 _REFERENCED_IMAGE_NOTE = (
     "<referenced_image_note>"
-    "用户引用了一张历史消息中的图片，这是用户当前询问的对象。"
-    "请识别并分析这张图片的内容，用自然语言回答用户的问题。"
+    "用户引用了一张历史消息中的图片，这张图就是用户当前询问的对象。"
+    "请先识别这张图片的实际内容（人物/场景/文字），再基于图片本身回答；"
+    "如果图片内容与最近的聊天话题不同，以图片实际内容为准，不要根据对话话题猜测。"
     "如果该图片是机器人自己之前发送的，回答时可以说明'这是我之前发的图'，"
     "但不要声称用户刚刚发送了它。"
     "</referenced_image_note>"
@@ -247,6 +248,70 @@ def has_referenced_image(event: Any) -> bool:
         if "[Image]" in message_str or "[图片]" in message_str:
             return True
     return False
+
+
+async def attach_quoted_images(req: Any, event: Any) -> int:
+    """Best-effort attach of quoted images into ``req.image_urls``.
+
+    AstrBot's own quote extraction can fail (e.g. persisted image files are
+    missing), leaving the model without the quoted image. This helper pulls
+    Image components from Reply chains directly as a fallback and is idempotent
+    against paths AstrBot already attached.
+    """
+    chain = getattr(getattr(event, "message_obj", None), "message", None)
+    if chain is None:
+        getter = getattr(event, "get_messages", None)
+        if callable(getter):
+            try:
+                chain = getter()
+            except Exception:
+                chain = None
+    if not chain:
+        return 0
+    image_urls = getattr(req, "image_urls", None)
+    if not isinstance(image_urls, list):
+        return 0
+    existing = {str(value) for value in image_urls if value}
+    attached = 0
+    for comp in chain:
+        if not _is_reply_component(comp):
+            continue
+        reply_chain = getattr(comp, "chain", None)
+        if not isinstance(reply_chain, list):
+            continue
+        for img in reply_chain:
+            if not isinstance(img, Image):
+                continue
+            ref = _image_ref(img)
+            if not ref:
+                continue
+            target = ref
+            converter = getattr(img, "convert_to_file_path", None)
+            if callable(converter):
+                try:
+                    converted = await converter()
+                except Exception:
+                    converted = None
+                if isinstance(converted, str) and converted.strip():
+                    target = converted.strip()
+            if target in existing:
+                continue
+            image_urls.append(target)
+            existing.add(target)
+            _append_note_part(
+                req,
+                f"[Image Attachment in quoted message: path {target}]",
+            )
+            attached += 1
+    return attached
+
+
+def _image_ref(img: Any) -> str | None:
+    for attr in ("file", "url", "path"):
+        value = getattr(img, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def mark_context_media_ownership(req: Any) -> int:
@@ -476,6 +541,7 @@ __all__ = [
     "append_text_only_media_note",
     "append_referenced_image_note",
     "append_user_media_note",
+    "attach_quoted_images",
     "describe_contexts",
     "has_referenced_image",
     "has_user_media",

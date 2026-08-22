@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 from astrbot.api.message_components import File, Image, Plain
@@ -7,6 +8,7 @@ from _astrbot_plugin_filter_test.self_reply_marker import (
     append_referenced_image_note,
     append_text_only_media_note,
     append_user_media_note,
+    attach_quoted_images,
     has_referenced_image,
     has_user_media,
     mark_context_media_ownership,
@@ -257,6 +259,50 @@ def test_append_user_media_note():
     text = req.extra_user_content_parts[0].text
     assert "用户本轮发送了图片/文件" in text
     assert "assistant" in text
+
+
+def test_attach_quoted_images_adds_path_and_note():
+    quote = SimpleNamespace(
+        type="Reply",
+        chain=[Image("file:///quoted.png")],
+        message_str="[图片]",
+    )
+    event = FakeEvent("u1", "group:1", chain=[quote, Plain("这个图是什么意思")])
+    req = SimpleNamespace(image_urls=[], extra_user_content_parts=[])
+
+    attached = asyncio.run(attach_quoted_images(req, event))
+
+    assert attached == 1
+    assert any("quoted.png" in str(url) for url in req.image_urls)
+    assert any(
+        "Image Attachment in quoted message" in getattr(part, "text", "")
+        for part in req.extra_user_content_parts
+    )
+
+
+def test_attach_quoted_images_is_idempotent_against_existing_paths():
+    quote = SimpleNamespace(
+        type="Reply",
+        chain=[Image("file:///already.png")],
+        message_str="[图片]",
+    )
+    event = FakeEvent("u1", "group:1", chain=[quote, Plain("看图")])
+    req = SimpleNamespace(
+        image_urls=["file:///already.png"],
+        extra_user_content_parts=[],
+    )
+
+    attached = asyncio.run(attach_quoted_images(req, event))
+
+    assert attached == 0
+    assert len(req.image_urls) == 1
+
+
+def test_attach_quoted_images_noop_without_reply():
+    event = FakeEvent("u1", "group:1", "普通消息")
+    req = SimpleNamespace(image_urls=[], extra_user_content_parts=[])
+
+    assert asyncio.run(attach_quoted_images(req, event)) == 0
 
 
 def test_mark_context_media_ownership_annotates_dict_parts():

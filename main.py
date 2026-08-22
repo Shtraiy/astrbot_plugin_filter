@@ -23,6 +23,7 @@ from .self_reply_marker import (
     append_referenced_image_note,
     append_text_only_media_note,
     append_user_media_note,
+    attach_quoted_images,
     has_referenced_image,
     has_user_media,
     mark_context_media_ownership,
@@ -206,9 +207,9 @@ class LanguageLogicOptimizer(Star):
         """
         if _event_is_stopped(event):
             return
-        self._apply_self_reply_marking(event, req)
+        await self._apply_self_reply_marking(event, req)
 
-    def _apply_self_reply_marking(self, event: AstrMessageEvent, req) -> None:
+    async def _apply_self_reply_marking(self, event: AstrMessageEvent, req) -> None:
         if req is None:
             return
         try:
@@ -236,8 +237,16 @@ class LanguageLogicOptimizer(Star):
                         user_has_ref_image = has_referenced_image(event)
                     except Exception:
                         user_has_ref_image = False
-                    if user_has_ref_image and append_referenced_image_note(req):
-                        logger.info("[自回复标记] 引用图片消息，已注入识图提示")
+                    if user_has_ref_image:
+                        try:
+                            attached = await attach_quoted_images(req, event)
+                        except Exception:
+                            attached = 0
+                        if append_referenced_image_note(req):
+                            logger.info(
+                                "[自回复标记] 引用图片消息，已注入识图提示"
+                                + (f"，兜底附加引用图 {attached} 张" if attached else "")
+                            )
                     elif append_text_only_media_note(req):
                         logger.info("[自回复标记] 纯文字消息，已注入图片归属提示")
         except Exception:

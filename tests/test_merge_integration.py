@@ -211,14 +211,20 @@ def test_self_reply_mark_injected_on_llm_request():
 
 def test_quoted_image_message_gets_recognition_note_not_text_only_note():
     optimizer = make_optimizer()
+    quote = SimpleNamespace(
+        type="Reply",
+        chain=[Image("file:///q.png")],
+        message_str="[图片]",
+    )
     event = FakeEvent(
         "u1",
         "group:1",
-        chain=[SimpleNamespace(type="Reply", chain=[Image("file:///q.png")], message_str="[图片]"), Plain("这个图是什么意思")],
+        chain=[quote, Plain("这个图是什么意思")],
         wake=True,
     )
     req = SimpleNamespace(
         prompt="这个图是什么意思",
+        image_urls=[],
         extra_user_content_parts=[],
     )
 
@@ -227,6 +233,7 @@ def test_quoted_image_message_gets_recognition_note_not_text_only_note():
     texts = [getattr(part, "text", "") for part in req.extra_user_content_parts]
     assert any("用户引用了一张历史消息中的图片" in text for text in texts)
     assert not any("用户本条消息为纯文字" in text for text in texts)
+    assert any("q.png" in str(url) for url in req.image_urls)
 
 
 def test_user_media_message_gets_attribution_note():

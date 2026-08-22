@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.9-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.10-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -33,7 +33,7 @@
 - 在请求上下文中按消息 role 直接标注媒体归属：历史 assistant 消息的媒体标 `[机器人自己发送]`、user 消息标 `[用户发送]`（请求级临时修改，不回写 AstrBot 历史）。
 - 校正声明在 livingmemory 等下游注入记忆之后生效（`on_llm_request` 后置钩子），避免被记忆"用户发过图"的错误总结盖过。
 - 继续剔除 meme_manager 等插件拼进用户消息的 `<recent_sent_meme>` 描述，防止模型误以为用户刚发了表情包。
-- 用户消息注入媒体归属提示：有图时注入 `<user_media_note>`（当前附件是用户的、历史 assistant 图片是机器人自己的）、引用历史图片时注入 `<referenced_image_note>`（被引用图是询问对象）、纯文字无图时注入 `<media_note>`。
+- 用户消息注入媒体归属提示：有图时注入 `<user_media_note>`（当前附件是用户的、历史 assistant 图片是机器人自己的）、引用历史图片时注入 `<referenced_image_note>`（被引用图是询问对象）并**兜底把引用链里的图片附加进请求**（补 AstrBot 引用图提取失败的缺口）、纯文字无图时注入 `<media_note>`。
 - 群聊内容防护：词库拦截 + 诱导绕过检测 + 新群聊严格模式。
 
 ## 与 livingmemory 的联动
@@ -106,6 +106,9 @@
 **为什么我引用它自己的图、它也注入了识图提示，它还是坚持说"是你发的"？**
 模型会优先采信上下文里的"证据"：历史里机器人自己说过的错误断言、livingmemory 记忆里"用户发过图"的总结。v3.0.5 起做三层处理：按 role 给历史媒体打归属标记、`<self_reply_mark>` 升级为"此前若声称用户发了这些表情包是误判、以本标记为准"的校正声明、校正声明在记忆注入之后再写入，压住记忆证据。
 
+**我引用了一张图问"这是什么"，bot 却回答成最近话题里的另一张图？**
+大概率是引用图没有真正进入模型（AstrBot 的引用图提取会因持久化文件缺失等失败，日志表现为"图片预处理结果为空，将忽略"），模型只能凭最近话题猜。v3.0.10 起，插件会直接从引用组件里取图附加进请求，并提示模型"以图片实际内容为准，不要根据对话话题猜测"。
+
 **为什么我发了一张纯图片，bot 却不评价我的图，反而去说它自己上次发的表情包？**
 纯图片消息的文本是空的，旧版本直接把空文本发给模型，模型没有"分析这张图"的任务指令，容易去回应历史里更显眼的图片。v3.0.3 起，纯媒体消息会自动补上识图占位文本，让模型明确本次任务就是识别并回应当前这张图。
 
@@ -128,6 +131,10 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.10
+
+- **修复**：引用图提问时，若 AstrBot 引用图提取失败（持久化文件缺失等），插件兜底从引用链直接取图附加进 `req.image_urls`；`<referenced_image_note>` 强化为"以图片实际内容为准，不要根据对话话题猜测"。
 
 ### v3.0.9
 
