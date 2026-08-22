@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.1-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -99,6 +99,10 @@
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.1
+
+- **修复**：引用历史图片提问（例如引用机器人自己发的表情包问"这是什么"）时，被引用的图会注入 `<referenced_image_note>` 识图提示，模型不再因"纯文字消息"提示而回答"没看到你发图片"。
 
 ### v3.0.0（重构）
 
