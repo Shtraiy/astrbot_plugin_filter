@@ -244,7 +244,7 @@ def has_referenced_image(event: Any) -> bool:
         ):
             return True
         message_str = str(getattr(comp, "message_str", "") or "")
-        if "图片" in message_str or "[Image]" in message_str or "[图片]" in message_str:
+        if "[Image]" in message_str or "[图片]" in message_str:
             return True
     return False
 

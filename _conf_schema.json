@@ -41,9 +41,9 @@
     "invisible": true
   },
   "merge_task_cancel": {
-    "description": "合并时取消旧 pipeline 任务",
+    "description": "合并时取消旧规划（兼容项）",
     "type": "bool",
-    "hint": "规划中收到同用户新消息时，尝试真正取消旧请求任务以加速重新回复；依赖 AstrBot 4.25+ 的取消传播，旧版本请保持关闭。",
+    "hint": "历史兼容项：AstrBot 4.25+ 已通过 active_event_registry 自动停止旧 Agent，无需额外开启；旧版本保持关闭。",
     "default": false,
     "invisible": true
   },

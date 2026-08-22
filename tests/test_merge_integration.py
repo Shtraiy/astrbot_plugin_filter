@@ -413,6 +413,20 @@ def test_other_sender_wakeup_does_not_request_agent_stop():
     assert calls == []
 
 
+def test_non_wake_same_sender_message_does_not_stop_agent():
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(first))
+    optimizer._get_message_merger().clear_owner(first)  # 无规划状态
+
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+    casual = FakeEvent("u1", "group:1", "普通消息不唤醒", wake=False)
+    asyncio.run(optimizer.on_message(casual))
+
+    assert calls == []
+
+
 def test_superseded_result_discarded_on_decoration():
     optimizer = make_optimizer()
     event = FakeEvent("u1", "group:1", "旧", wake=True)
@@ -472,6 +486,8 @@ def test_strip_structure_tags_handles_both_tags():
     assert _strip_structure_tags("<blockquote>引用</blockquote> 内容") == "引用 内容"
     assert _strip_structure_tags("正常文本") == "正常文本"
     assert _strip_structure_tags("") == ""
+    assert _strip_structure_tags("<p>段落</p><br>换行") == "段落换行"
+    assert _strip_structure_tags("<div>盒子</div><code>x</code>") == "盒子x"
 
 
 def test_marking_hook_annotates_history_and_injects_notes():

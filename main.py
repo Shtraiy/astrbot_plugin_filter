@@ -83,11 +83,12 @@ class LanguageLogicOptimizer(Star):
             if merger.is_window_open(event):
                 merger.capture(event)
                 return
-            if self._get_reply_coordinator().active_same_sender(event):
-                # Same user woke again while their reply is still active:
-                # stop the running agent first so AstrBot 4.27's follow-up
-                # capture cannot swallow this message into the old planning.
-                self._request_agent_stop(event)
+            if self._event_is_wake_up(event):
+                if self._get_reply_coordinator().active_same_sender(event):
+                    # Same user woke again while their reply is still active:
+                    # stop the running agent first so AstrBot 4.27's follow-up
+                    # capture cannot swallow this message into the old planning.
+                    self._request_agent_stop(event)
             if merger.planning_active(event):
                 # AstrBot 4.25+: stop the running agent before follow-up
                 # capture or our own hooks can race with the old planning.
@@ -131,15 +132,6 @@ class LanguageLogicOptimizer(Star):
                 if old_event is not None:
                     self._request_agent_stop(event)
                     coordinator.supersede_active_event(old_event)
-                    if (
-                        self._get_config("merge_task_cancel", False)
-                        and pipeline_task is not None
-                        and not pipeline_task.done()
-                    ):
-                        try:
-                            pipeline_task.cancel()
-                        except Exception:
-                            logger.debug("[消息合并] 旧任务取消失败", exc_info=True)
                 event.message_str = merger.join_text(
                     earlier_text,
                     str(getattr(event, "message_str", "") or ""),
@@ -456,7 +448,11 @@ def _event_is_stopped(event) -> bool:
 
 def _strip_structure_tags(text: str) -> str:
     """Remove stray quote/blockquote structure tags echoed by the model."""
-    return re.sub(r"</?(?:blockquote|quote)\s*>", "", text or "").strip()
+    return re.sub(
+        r"</?(?:blockquote|quote|p|div|br|span|code|pre)\s*/?>",
+        "",
+        text or "",
+    ).strip()
 
 
 def _result_plain_text(result) -> str:

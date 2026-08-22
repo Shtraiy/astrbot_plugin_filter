@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.8-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.9-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -128,6 +128,13 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.9
+
+- **修复**：普通（非唤醒）同用户消息不再打断正在生成的回复（此前会误停 Agent，导致消息被吞）。
+- **修复**：引用文本中含"图片"二字不再被误判为引用图（仅匹配 `[图片]`/`[Image]` 占位符）。
+- **清理**：移除 `merge_task_cancel` 直接取消管道任务的风险分支（4.25+ 已由 `active_event_registry` 安全停止取代，配置项保留兼容）。
+- **增强**：结构标签清洗扩展至 `<p>`/`<div>`/`<br>`/`<span>`/`<code>`/`<pre>`。
 
 ### v3.0.8
 

@@ -232,6 +232,17 @@ def test_has_referenced_image_false_for_plain_quote():
     assert has_referenced_image(event) is False
 
 
+def test_has_referenced_image_ignores_plain_word_image_in_quote_text():
+    quote = SimpleNamespace(
+        type="Reply",
+        chain=[Plain("这张图片怎么样")],
+        message_str="这张图片怎么样",
+    )
+    event = FakeEvent("u1", "group:1", chain=[quote, Plain("接着说")])
+
+    assert has_referenced_image(event) is False
+
+
 def test_append_referenced_image_note():
     req = SimpleNamespace(extra_user_content_parts=[])
 
