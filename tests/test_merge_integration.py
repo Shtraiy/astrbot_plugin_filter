@@ -311,6 +311,61 @@ def test_media_supplement_keeps_existing_text_without_placeholder():
     assert merged == "第一段"
 
 
+def test_quoted_wakeup_cancels_media_window_and_keeps_own_text():
+    optimizer = make_optimizer()
+    optimizer._get_merge_window_seconds = lambda: 0.2
+    first = FakeEvent(
+        "u1",
+        "group:1",
+        text="",
+        chain=[Image("file:///first.png")],
+        wake=True,
+    )
+    quote = SimpleNamespace(
+        type="Reply",
+        chain=[Image("file:///first.png")],
+        message_str="[图片]",
+    )
+    second = FakeEvent(
+        "u1",
+        "group:1",
+        text="这个图是什么意思",
+        chain=[quote, Plain("这个图是什么意思")],
+        wake=True,
+    )
+
+    async def run():
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
+        await asyncio.sleep(0.05)
+        await optimizer.on_waiting_llm_request(second)
+        await first_task
+        return first.message_str, first.stopped, second.message_str
+
+    first_text, first_stopped, second_text = asyncio.run(run())
+
+    assert first_text == ""  # 窗口被取消，不补占位、不发送
+    assert first_stopped is True
+    assert second_text == "这个图是什么意思"  # 引用消息独立走管道
+
+
+def test_plain_wake_followup_still_merges_during_window():
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "group:1", "第一段", wake=True)
+    second = FakeEvent("u1", "group:1", "补充", wake=True)
+
+    async def run():
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
+        await asyncio.sleep(0.05)
+        await optimizer.on_waiting_llm_request(second)
+        await first_task
+        return first.message_str, second.stopped
+
+    merged, stopped = asyncio.run(run())
+
+    assert merged == "第一段\n补充"
+    assert stopped is True
+
+
 def test_superseded_result_discarded_on_decoration():
     optimizer = make_optimizer()
     event = FakeEvent("u1", "group:1", "旧", wake=True)

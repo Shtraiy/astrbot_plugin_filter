@@ -251,3 +251,37 @@ def test_has_media_detects_image_components():
         )
         is True
     )
+
+
+def test_message_has_quote_detects_reply_components():
+    manager = make_manager()
+    quote = SimpleNamespace(type="Reply", chain=[Plain("旧消息")], message_str="旧消息")
+
+    assert manager.message_has_quote(FakeEvent("u1", "group:1", "普通消息")) is False
+    assert (
+        manager.message_has_quote(
+            FakeEvent("u1", "group:1", chain=[quote, Plain("这个图是什么意思")])
+        )
+        is True
+    )
+
+
+def test_cancel_window_returns_owner_and_clears_state():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+
+    cancelled = manager.cancel_window(FakeEvent("u1", "group:1", "引用+@bot", wake=True))
+
+    assert cancelled is owner
+    assert not manager.is_window_open(FakeEvent("u1", "group:1", "x", wake=True))
+    assert manager.cancel_window(FakeEvent("u1", "group:1", "x", wake=True)) is None
+
+
+def test_cancel_window_requires_window_phase():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+    manager.finalize_window(owner)
+
+    assert manager.cancel_window(FakeEvent("u1", "group:1", "x", wake=True)) is None

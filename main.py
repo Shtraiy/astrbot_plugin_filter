@@ -95,12 +95,23 @@ class LanguageLogicOptimizer(Star):
             if self._get_config("enable_message_merge", True)
             else None
         )
+        skip_window = False
 
         if merge_key is not None:
             if merger.is_window_open(event):
-                merger.merge_wake(event)
-                event.stop_event()
-                return
+                if merger.message_has_quote(event):
+                    # A quoted-message wake-up (e.g. "quote my just-sent image
+                    # and @bot") cannot be merged; cancel the pending window so
+                    # the media-only first message does not also fire, and let
+                    # AstrBot handle the quoted image natively.
+                    old = merger.cancel_window(event)
+                    if old is not None:
+                        coordinator.supersede_active_event(old)
+                    skip_window = True
+                else:
+                    merger.merge_wake(event)
+                    event.stop_event()
+                    return
 
             pending = merger.take_planning(event)
             if pending is not None:
@@ -134,14 +145,22 @@ class LanguageLogicOptimizer(Star):
 
         if not await coordinator.admit_wakeup(event):
             return
-        if merge_key is not None and not coordinator.is_session_busy(event):
+        if (
+            merge_key is not None
+            and not coordinator.is_session_busy(event)
+            and not skip_window
+        ):
             pipeline_task = asyncio.current_task()
             if merger.start_window(event, pipeline_task=pipeline_task):
                 try:
                     await asyncio.sleep(self._get_merge_window_seconds())
                 finally:
                     merged = merger.finalize_window(event)
-                    if not (merged or "").strip() and merger.has_media(event):
+                    if (
+                        not _event_is_stopped(event)
+                        and not (merged or "").strip()
+                        and merger.has_media(event)
+                    ):
                         merged = MEDIA_ONLY_PROMPT
                     event.message_str = merged
                     merger.sync_pending_text(event, merged)

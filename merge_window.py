@@ -114,6 +114,32 @@ class MergeWindowManager:
             and state.owner_event is not event
         )
 
+    @classmethod
+    def message_has_quote(cls, event: Any) -> bool:
+        """Return True when the message quotes a historical message (Reply)."""
+        chain = getattr(getattr(event, "message_obj", None), "message", None)
+        if chain is None:
+            getter = getattr(event, "get_messages", None)
+            if callable(getter):
+                try:
+                    chain = getter()
+                except Exception:
+                    chain = None
+        if not chain:
+            return False
+        return any(cls._is_reply_component(comp) for comp in chain)
+
+    def cancel_window(self, event: Any) -> Any | None:
+        """Cancel the open window for this user and return its owner event."""
+        key = self.user_key(event)
+        if key is None:
+            return None
+        state = self._states.get(key)
+        if state is None or state.phase != "window":
+            return None
+        self._states.pop(key, None)
+        return state.owner_event
+
     def capture(self, event: Any) -> bool:
         """Append a same-user non-wake follow-up while the window is open."""
         key = self.user_key(event)
@@ -313,6 +339,13 @@ class MergeWindowManager:
         if not self._get_config("merge_include_media", True):
             return False
         return isinstance(comp, (Image, File))
+
+    @staticmethod
+    def _is_reply_component(comp: Any) -> bool:
+        name = type(comp).__name__.casefold()
+        if "reply" in name:
+            return True
+        return "reply" in str(getattr(comp, "type", "") or "").casefold()
 
     @staticmethod
     def attach_media(event: Any, media: list[Any]) -> None:
