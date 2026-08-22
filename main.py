@@ -140,6 +140,7 @@ class LanguageLogicOptimizer(Star):
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
         """Guard + admission + self-reply marking + content guard before LLM."""
         if _event_is_stopped(event):
+            self._get_message_merger().clear_owner(event)
             return
         if not await self._get_reply_coordinator().admit_wakeup(event):
             return
@@ -161,6 +162,7 @@ class LanguageLogicOptimizer(Star):
             await self._send_guard_reply(event, decision.category)
         finally:
             self._get_reply_coordinator().finish_active(event)
+            self._get_message_merger().clear_owner(event)
 
     def _apply_self_reply_marking(self, event: AstrMessageEvent, req) -> None:
         if req is None:
