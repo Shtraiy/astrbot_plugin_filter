@@ -53,6 +53,21 @@ class ReplyCoordinator:
         active = self._active_by_session.get(session)
         return active is not None and active is not event
 
+    def active_same_sender(self, event: Any) -> bool:
+        """True when the session's active reply belongs to the same sender.
+
+        Same-sender wake-ups must supersede and re-plan; different senders are
+        left for the next turn (AstrBot's session lock serializes them).
+        """
+        session = self._session_key(event)
+        active = self._active_by_session.get(session)
+        if active is None or active is event:
+            return False
+        try:
+            return str(active.get_sender_id()) == str(event.get_sender_id())
+        except Exception:
+            return False
+
     def supersede_active_event(self, event: Any) -> bool:
         """Cancel an active event's reply so a merged follow-up can regenerate."""
         if event is None:

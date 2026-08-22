@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.7-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.8-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -28,6 +28,7 @@
 - 图片/文件消息随文本一并合并（引用、转发等不参与）。
 - 合并时若旧回复已在生成：终止旧规划、合并文本重新生成，旧回复不会发送、不会写入 AstrBot 历史，也不会被 livingmemory 记录。
 - 按会话独立：不同会话可并行回复，互不排队、无全局闸门。
+- 同用户窗口语义：同一用户在同一对话回合内再次唤醒 → 终止当前规划、把新内容并入上下文重新规划（只回一次）；**不同用户**唤醒才进入下一轮排队。
 - 记录机器人最近发送的文本与媒体，并在每次请求前注入客观归属标记（`<self_reply_mark>`），保留 assistant 历史媒体的同时纠正归属误判。
 - 在请求上下文中按消息 role 直接标注媒体归属：历史 assistant 消息的媒体标 `[机器人自己发送]`、user 消息标 `[用户发送]`（请求级临时修改，不回写 AstrBot 历史）。
 - 校正声明在 livingmemory 等下游注入记忆之后生效（`on_llm_request` 后置钩子），避免被记忆"用户发过图"的错误总结盖过。
@@ -117,6 +118,9 @@
 **为什么同样的回复会被发送两遍（复读）？**
 AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 respond 内置去重只对纯文本链生效，回复一旦带上 meme 图片就失效）。v3.0.7 起，插件在装饰阶段做发送级去重：同一会话 15 秒内出现完全相同的回复文本时直接丢弃，避免复读。
 
+**同一个人连续 @ 两次，为什么 bot 把第二次当成下一轮？**
+同用户再次唤醒必须终止旧规划、合并重生成；v3.0.8 起，只要会话的活跃回复属于同一用户（即使合并状态已被清理），也会先停掉旧 Agent，防止 AstrBot 4.27 的 follow-up 捕获把第二次唤醒吞进旧规划；不同用户唤醒则照常进入下一轮。
+
 **群聊里不带 @ 的补充消息能合并吗？**
 能。窗口期直接并入；规划期会被自动提升为唤醒并合并重生成。其他用户的发言不会触发。
 
@@ -124,6 +128,10 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.8
+
+- **修复**：同用户再次唤醒时，即使合并状态已被清理也先停掉旧 Agent（`active_same_sender` 判定），杜绝"第二次唤醒被保存进下一轮"；不同用户唤醒不受影响，仍走下一轮。
 
 ### v3.0.7
 

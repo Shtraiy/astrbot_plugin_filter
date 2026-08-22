@@ -386,6 +386,33 @@ def test_expired_planning_does_not_promote_later_media_message():
     assert img.is_at_or_wake_command is False
 
 
+def test_same_sender_wakeup_requests_agent_stop_even_without_merge_state():
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(first))
+    optimizer._get_message_merger().clear_owner(first)  # 模拟状态已被清理
+
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+    second = FakeEvent("u1", "group:1", "第二次唤醒", wake=True)
+    asyncio.run(optimizer.on_message(second))
+
+    assert len(calls) == 1
+
+
+def test_other_sender_wakeup_does_not_request_agent_stop():
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(first))
+
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+    other = FakeEvent("u2", "group:1", "别人说话", wake=True)
+    asyncio.run(optimizer.on_message(other))
+
+    assert calls == []
+
+
 def test_superseded_result_discarded_on_decoration():
     optimizer = make_optimizer()
     event = FakeEvent("u1", "group:1", "旧", wake=True)

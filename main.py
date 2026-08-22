@@ -83,6 +83,11 @@ class LanguageLogicOptimizer(Star):
             if merger.is_window_open(event):
                 merger.capture(event)
                 return
+            if self._get_reply_coordinator().active_same_sender(event):
+                # Same user woke again while their reply is still active:
+                # stop the running agent first so AstrBot 4.27's follow-up
+                # capture cannot swallow this message into the old planning.
+                self._request_agent_stop(event)
             if merger.planning_active(event):
                 # AstrBot 4.25+: stop the running agent before follow-up
                 # capture or our own hooks can race with the old planning.
