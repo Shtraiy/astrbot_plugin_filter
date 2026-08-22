@@ -147,11 +147,12 @@ class SelfReplyMarker:
             "用户本轮消息附带的图片/文件才是用户发送的。"
         )
         lines.append(
-            "任何记忆、总结或历史中声称'用户发送过图片/表情包'的内容若与本标记冲突，以本标记为准。"
+            "如果历史对话或记忆声称'用户发送过以上这些表情包/图片'，那是机器人此前的误判，"
+            "以本标记为准，不要继续坚持'是用户发送的'。"
         )
         lines.append(
             "用户引用历史消息中的图片提问时，该图片是用户当前询问的对象"
-            "（即使它是机器人自己之前发送的），需要识别分析。"
+            "（即使它是机器人自己之前发送的），需要识别分析，但仍应说清它的真实发送者。"
         )
         lines.append("</self_reply_mark>")
         return "\n".join(lines)
@@ -218,6 +219,86 @@ def has_referenced_image(event: Any) -> bool:
         message_str = str(getattr(comp, "message_str", "") or "")
         if "图片" in message_str or "[Image]" in message_str or "[图片]" in message_str:
             return True
+    return False
+
+
+def mark_context_media_ownership(req: Any) -> int:
+    """Annotate media blocks in request history with role ownership.
+
+    Media inside assistant-role history entries becomes
+    ``[机器人自己发送]``, media inside user-role entries becomes
+    ``[用户发送]``. The request contexts are a per-request copy loaded from
+    conversation history, so nothing is written back to AstrBot history.
+    Returns the number of annotated messages.
+    """
+    contexts = _request_contexts(req)
+    if not contexts:
+        return 0
+    marked = 0
+    for entry in contexts:
+        role = str(_entry_role(entry) or "").casefold()
+        if role in {"assistant", "bot", "ai"}:
+            prefix = "[机器人自己发送]"
+        elif role == "user":
+            prefix = "[用户发送]"
+        else:
+            continue
+        content = _entry_content(entry)
+        if isinstance(content, str):
+            continue
+        if _annotate_media_blocks(content, prefix):
+            marked += 1
+    return marked
+
+
+def _annotate_media_blocks(content: Any, prefix: str) -> bool:
+    """Prefix media blocks inside a message content structure. Returns True if changed."""
+    changed = False
+    if isinstance(content, list):
+        for item in content:
+            if _annotate_media_block(item, prefix):
+                changed = True
+    elif isinstance(content, Mapping):
+        if _is_media_part(content):
+            return _prefix_media_mapping(content, prefix)
+        nested = content.get("content")
+        if nested is not None:
+            if _annotate_media_blocks(nested, prefix):
+                changed = True
+    return changed
+
+
+def _annotate_media_block(item: Any, prefix: str) -> bool:
+    if isinstance(item, Mapping):
+        if _is_media_part(item):
+            return _prefix_media_mapping(item, prefix)
+        nested = item.get("content")
+        if isinstance(nested, list):
+            return _annotate_media_blocks(nested, prefix)
+        return False
+    if _is_media_part(item):
+        text = str(getattr(item, "text", "") or "").strip()
+        if text.startswith(prefix):
+            return False
+        try:
+            item.text = f"{prefix} {text}".strip()
+            return True
+        except Exception:
+            return False
+    return False
+
+
+def _prefix_media_mapping(item: Mapping, prefix: str) -> bool:
+    for key in ("text", "content"):
+        if key in item:
+            original = str(item.get(key) or "").strip()
+            if original and not original.startswith(prefix):
+                item[key] = f"{prefix} {original}"
+                return True
+            return False
+    if "type" in item:
+        item["text"] = f"{prefix} {item['type']}"
+        return True
     return False
 
 
@@ -306,7 +387,19 @@ def _is_media_part(part: Any) -> bool:
             return False
         return any(token in ptype for token in _MEDIA_TYPE_TOKENS)
     name = type(part).__name__.casefold()
-    return any(token in name for token in _MEDIA_TYPE_TOKENS)
+    if any(token in name for token in _MEDIA_TYPE_TOKENS):
+        return True
+    for attr in ("url", "file", "path", "image", "video"):
+        value = getattr(part, attr, None)
+        if value is not None and str(value).strip():
+            return True
+    text = str(getattr(part, "text", "") or "")
+    return (
+        "[Image" in text
+        or "[File" in text
+        or "Image Attachment" in text
+        or "File Attachment" in text
+    )
 
 
 def _entry_role(entry: Any) -> Any:
@@ -359,5 +452,6 @@ __all__ = [
     "describe_contexts",
     "has_referenced_image",
     "has_user_media",
+    "mark_context_media_ownership",
     "strip_recent_self_meme_context",
 ]

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from astrbot.api import logger
 from astrbot.api.all import MessageChain
 from astrbot.api.event import AstrMessageEvent, filter as _event_filter
+from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
 from .content_guard import SAFE_REPLY, evaluate_input, is_group_origin, parse_terms
@@ -23,6 +25,7 @@ from .self_reply_marker import (
     append_user_media_note,
     has_referenced_image,
     has_user_media,
+    mark_context_media_ownership,
     strip_recent_self_meme_context,
 )
 
@@ -167,13 +170,12 @@ class LanguageLogicOptimizer(Star):
 
     @_event_filter.on_llm_request(priority=1000)
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
-        """Guard + admission + self-reply marking + content guard before LLM."""
+        """Guard + admission + content guard before LLM."""
         if _event_is_stopped(event):
             self._get_message_merger().clear_owner(event)
             return
         if not await self._get_reply_coordinator().admit_wakeup(event):
             return
-        self._apply_self_reply_marking(event, req)
         if not self._get_config("enable_content_guard", True):
             return
 
@@ -193,10 +195,24 @@ class LanguageLogicOptimizer(Star):
             self._get_reply_coordinator().finish_active(event)
             self._get_message_merger().clear_owner(event)
 
+    @_event_filter.on_llm_request(priority=-1000)
+    async def on_llm_request_marking(self, event: AstrMessageEvent, req) -> None:
+        """Inject ownership corrections after downstream on_llm_request hooks.
+
+        Runs last so the corrections land after livingmemory's injected
+        memories instead of being outranked by them.
+        """
+        if _event_is_stopped(event):
+            return
+        self._apply_self_reply_marking(event, req)
+
     def _apply_self_reply_marking(self, event: AstrMessageEvent, req) -> None:
         if req is None:
             return
         try:
+            marked = mark_context_media_ownership(req)
+            if marked:
+                logger.info("[自回复标记] 已标注 %d 条历史消息的媒体归属", marked)
             marker = self._get_self_reply_marker()
             if self._get_config("enable_self_reply_mark", True):
                 if marker.mark_own_recent_replies(req, event):
@@ -241,6 +257,14 @@ class LanguageLogicOptimizer(Star):
             if self._get_reply_coordinator().discard_superseded_result(event):
                 return
             self._get_message_merger().clear_owner(event)
+            result = event.get_result()
+            chain = getattr(result, "chain", None)
+            if chain:
+                for comp in chain:
+                    if isinstance(comp, Plain) and comp.text:
+                        cleaned = _strip_structure_tags(comp.text)
+                        if cleaned != comp.text:
+                            comp.text = cleaned
         except Exception:
             logger.debug("[消息合并] 结果清理失败", exc_info=True)
 
@@ -385,6 +409,11 @@ def _event_is_stopped(event) -> bool:
         except Exception:
             return False
     return bool(getattr(event, "stopped", False))
+
+
+def _strip_structure_tags(text: str) -> str:
+    """Remove stray quote/blockquote structure tags echoed by the model."""
+    return re.sub(r"</?(?:blockquote|quote)\s*>", "", text or "").strip()
 
 
 def _read_config_value(source, key: str, default):

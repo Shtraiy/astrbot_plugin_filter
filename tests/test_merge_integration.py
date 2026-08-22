@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from astrbot.api.message_components import Image, Plain
 
-from main import MEDIA_ONLY_PROMPT, LanguageLogicOptimizer
+from main import MEDIA_ONLY_PROMPT, LanguageLogicOptimizer, _strip_structure_tags
 
 
 class FakeContext:
@@ -200,7 +200,7 @@ def test_self_reply_mark_injected_on_llm_request():
         extra_user_content_parts=[],
     )
 
-    asyncio.run(optimizer.on_llm_request(event, req))
+    asyncio.run(optimizer.on_llm_request_marking(event, req))
 
     injected = any(
         "机器人自己" in getattr(part, "text", "")
@@ -222,7 +222,7 @@ def test_quoted_image_message_gets_recognition_note_not_text_only_note():
         extra_user_content_parts=[],
     )
 
-    asyncio.run(optimizer.on_llm_request(event, req))
+    asyncio.run(optimizer.on_llm_request_marking(event, req))
 
     texts = [getattr(part, "text", "") for part in req.extra_user_content_parts]
     assert any("用户引用了一张历史消息中的图片" in text for text in texts)
@@ -242,7 +242,7 @@ def test_user_media_message_gets_attribution_note():
         extra_user_content_parts=[],
     )
 
-    asyncio.run(optimizer.on_llm_request(event, req))
+    asyncio.run(optimizer.on_llm_request_marking(event, req))
 
     texts = [getattr(part, "text", "") for part in req.extra_user_content_parts]
     assert any("用户本轮发送了图片/文件" in text for text in texts)
@@ -376,3 +376,54 @@ def test_superseded_result_discarded_on_decoration():
     asyncio.run(optimizer.on_decorating_result(event))
 
     assert event.get_result().chain == []
+
+
+def test_decoration_strips_structure_tags():
+    optimizer = make_optimizer()
+    result = SimpleNamespace(chain=[Plain("原来是这样呀</blockquote> [图片]")])
+    event = FakeEvent("u1", "group:1", wake=True)
+    event.set_result(result)
+
+    asyncio.run(optimizer.on_decorating_result(event))
+
+    assert result.chain[0].text == "原来是这样呀 [图片]"
+
+
+def test_strip_structure_tags_handles_both_tags():
+    assert _strip_structure_tags("<blockquote>引用</blockquote> 内容") == "引用 内容"
+    assert _strip_structure_tags("正常文本") == "正常文本"
+    assert _strip_structure_tags("") == ""
+
+
+def test_marking_hook_annotates_history_and_injects_notes():
+    optimizer = make_optimizer()
+    event = FakeEvent("u1", "group:1", "这个不是我发的呀", wake=True)
+    req = SimpleNamespace(
+        prompt="这个不是我发的呀",
+        contexts=[
+            {
+                "role": "assistant",
+                "content": [{"type": "image", "text": "meme.png"}],
+            },
+        ],
+        extra_user_content_parts=[],
+    )
+
+    asyncio.run(optimizer.on_llm_request_marking(event, req))
+
+    assert "机器人自己发送" in str(req.contexts[0]["content"])
+    assert any(
+        "纯文字" in getattr(part, "text", "")
+        for part in req.extra_user_content_parts
+    )
+
+
+def test_marking_hook_skips_stopped_events():
+    optimizer = make_optimizer()
+    event = FakeEvent("u1", "group:1", "旧", wake=True)
+    event.stop_event()
+    req = SimpleNamespace(prompt="旧", contexts=[], extra_user_content_parts=[])
+
+    asyncio.run(optimizer.on_llm_request_marking(event, req))
+
+    assert req.extra_user_content_parts == []

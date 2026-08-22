@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.4-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.5-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -26,6 +26,8 @@
 - 合并时若旧回复已在生成：终止旧规划、合并文本重新生成，旧回复不会发送、不会写入 AstrBot 历史，也不会被 livingmemory 记录。
 - 按会话独立：不同会话可并行回复，互不排队、无全局闸门。
 - 记录机器人最近发送的文本与媒体，并在每次请求前注入客观归属标记（`<self_reply_mark>`），保留 assistant 历史媒体的同时纠正归属误判。
+- 在请求上下文中按消息 role 直接标注媒体归属：历史 assistant 消息的媒体标 `[机器人自己发送]`、user 消息标 `[用户发送]`（请求级临时修改，不回写 AstrBot 历史）。
+- 校正声明在 livingmemory 等下游注入记忆之后生效（`on_llm_request` 后置钩子），避免被记忆"用户发过图"的错误总结盖过。
 - 继续剔除 meme_manager 等插件拼进用户消息的 `<recent_sent_meme>` 描述，防止模型误以为用户刚发了表情包。
 - 用户消息注入媒体归属提示：有图时注入 `<user_media_note>`（当前附件是用户的、历史 assistant 图片是机器人自己的）、引用历史图片时注入 `<referenced_image_note>`（被引用图是询问对象）、纯文字无图时注入 `<media_note>`。
 - 群聊内容防护：词库拦截 + 诱导绕过检测 + 新群聊严格模式。
@@ -97,6 +99,9 @@
 **为什么机器人发图后，模型还是把我发的图和它自己发的表情包混在一起？**
 当用户本轮确实发图时，请求里同时存在用户的附件和历史上机器人自己发的表情包，旧逻辑此时不注入任何提示，模型分不清归属。v3.0.2 起，用户有图时也会注入 `<user_media_note>`，明确"本轮附件是用户的、历史 assistant 图片是机器人自己的"。
 
+**为什么我引用它自己的图、它也注入了识图提示，它还是坚持说"是你发的"？**
+模型会优先采信上下文里的"证据"：历史里机器人自己说过的错误断言、livingmemory 记忆里"用户发过图"的总结。v3.0.5 起做三层处理：按 role 给历史媒体打归属标记、`<self_reply_mark>` 升级为"此前若声称用户发了这些表情包是误判、以本标记为准"的校正声明、校正声明在记忆注入之后再写入，压住记忆证据。
+
 **为什么我发了一张纯图片，bot 却不评价我的图，反而去说它自己上次发的表情包？**
 纯图片消息的文本是空的，旧版本直接把空文本发给模型，模型没有"分析这张图"的任务指令，容易去回应历史里更显眼的图片。v3.0.3 起，纯媒体消息会自动补上识图占位文本，让模型明确本次任务就是识别并回应当前这张图。
 
@@ -110,6 +115,11 @@
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.5
+
+- **通用归属方案**：请求上下文中按 role 标注历史媒体归属（`[机器人自己发送]` / `[用户发送]`）；`<self_reply_mark>` 升级为事实校正声明；标记/校正钩子移到 `on_llm_request`（priority -1000），在 livingmemory 记忆注入之后生效。
+- **出站清洗**：剥离回复中模型误抄的 `<blockquote>`/`</blockquote>` 结构标签（AstrBot 4.26 引用消息渲染产生）。
 
 ### v3.0.4
 

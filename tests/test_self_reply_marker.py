@@ -9,6 +9,7 @@ from _astrbot_plugin_filter_test.self_reply_marker import (
     append_user_media_note,
     has_referenced_image,
     has_user_media,
+    mark_context_media_ownership,
     strip_recent_self_meme_context,
 )
 
@@ -208,3 +209,76 @@ def test_append_user_media_note():
     text = req.extra_user_content_parts[0].text
     assert "用户本轮发送了图片/文件" in text
     assert "assistant" in text
+
+
+def test_mark_context_media_ownership_annotates_dict_parts():
+    req = SimpleNamespace(
+        contexts=[
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "看这个"},
+                    {"type": "image", "image": "x.png"},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "我的图"},
+                    {"type": "image", "image": "y.png"},
+                ],
+            },
+        ]
+    )
+
+    marked = mark_context_media_ownership(req)
+
+    assert marked == 2
+    assistant_content = req.contexts[0]["content"]
+    user_content = req.contexts[1]["content"]
+    assert any(
+        "机器人自己发送" in str(part.get("text", "")) for part in assistant_content
+    )
+    assert any("用户发送" in str(part.get("text", "")) for part in user_content)
+
+
+def test_mark_context_media_ownership_annotates_object_parts():
+    assistant_part = SimpleNamespace(text="[Image Attachment: path /a.png]")
+    req = SimpleNamespace(
+        contexts=[
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "看"}, assistant_part],
+            },
+        ]
+    )
+
+    marked = mark_context_media_ownership(req)
+
+    assert marked == 1
+    assert assistant_part.text.startswith("[机器人自己发送]")
+
+
+def test_mark_context_media_ownership_skips_string_content():
+    req = SimpleNamespace(
+        contexts=[
+            {"role": "assistant", "content": "[Image] 旧图"},
+            {"role": "user", "content": "纯文字"},
+        ]
+    )
+
+    assert mark_context_media_ownership(req) == 0
+
+
+def test_mark_context_media_ownership_is_idempotent():
+    req = SimpleNamespace(
+        contexts=[
+            {
+                "role": "assistant",
+                "content": [{"type": "image", "text": "x.png"}],
+            },
+        ]
+    )
+
+    assert mark_context_media_ownership(req) == 1
+    assert mark_context_media_ownership(req) == 0  # 已加前缀，不重复
