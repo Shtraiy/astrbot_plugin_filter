@@ -1,132 +1,8 @@
 {
-  "llm_provider_id": {
-    "description": "分段/文风优化使用的 LLM 模型",
-    "type": "string",
-    "hint": "选择用于智能分段和文风优化的 LLM 模型。留空则只使用规则分段。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "enable_llm_style": {
-    "description": "启用 LLM 文风优化",
-    "type": "bool",
-    "hint": "开启后每条正常的非空回复都会调用 LLM，保留原意并删除适量八股文；需要配置 llm_provider_id。",
-    "default": true
-  },
-  "llm_timeout_seconds": {
-    "description": "LLM 单次请求超时时间（秒）",
-    "type": "float",
-    "hint": "文风润色或智能分段单次最多等待的时间；超时会自动回退到原文或规则处理，默认 15 秒，最大 60 秒。",
-    "default": 15.0,
-    "invisible": true
-  },
-  "enable_llm_segment": {
-    "description": "启用 LLM 智能分段",
-    "type": "bool",
-    "hint": "开启后使用 LLM 进行语义分段；关闭则使用规则分段。",
-    "default": false
-  },
-  "segment_min_chars": {
-    "description": "触发分段的最少字符数",
-    "type": "int",
-    "hint": "回复长度超过该值才会尝试 LLM/规则分段；默认 80，最小 20。",
-    "default": 80,
-    "invisible": true
-  },
-  "enable_de_ai_flavor": {
-    "description": "启用正则去 AI 味",
-    "type": "bool",
-    "hint": "清除常见公式化表达，例如“我来整理一下”“以下是”等。",
-    "default": true,
-    "invisible": true
-  },
-  "enable_image_render": {
-    "description": "启用图片渲染",
-    "type": "bool",
-    "hint": "检测到结构化列表时自动渲染为图片发送，需要 Pillow。",
-    "default": false,
-    "invisible": true
-  },
-  "image_min_list_items": {
-    "description": "触发图片渲染的最少列表项数",
-    "type": "int",
-    "hint": "文本包含不少于此数量的编号列表行时触发图片渲染。",
-    "default": 3,
-    "invisible": true
-  },
-  "image_font_size": {
-    "description": "图片字号（px）",
-    "type": "int",
-    "hint": "渲染图片使用的字体大小。",
-    "default": 22,
-    "invisible": true
-  },
-  "image_max_width": {
-    "description": "图片最大宽度（px）",
-    "type": "int",
-    "hint": "渲染图片的最大宽度，超出会自动换行。",
-    "default": 600,
-    "invisible": true
-  },
-  "multi_message": {
-    "description": "多消息逐段发送",
-    "type": "bool",
-    "hint": "开启后将分段后的文本拆成多条消息。",
-    "default": true,
-    "invisible": true
-  },
-  "delay_min": {
-    "description": "消息间隔下限（秒）",
-    "type": "float",
-    "hint": "每条后续消息之间的最小间隔，运行时限制在 2~5 秒。",
-    "default": 2.0,
-    "invisible": true
-  },
-  "delay_max": {
-    "description": "消息间隔上限（秒）",
-    "type": "float",
-    "hint": "每条后续消息之间的最大间隔，运行时限制在 2~5 秒。",
-    "default": 5.0,
-    "invisible": true
-  },
-  "gate_seconds": {
-    "description": "闸门时间（秒）",
-    "type": "float",
-    "hint": "全局唤醒在最后一条分段消息真正发送完成前始终锁定；发送完成后等待此时间再接受新的唤醒。设置为 0 表示发送完成后立即接受。",
-    "default": 0.0,
-    "invisible": true
-  },
-  "gate_ttl_seconds": {
-    "description": "闸门最大存活时间（秒）",
-    "type": "float",
-    "hint": "请求异常中断或回复从未完成时，闸门会在超时后自动释放，避免该来源永久无法唤醒；设置为 0 可禁用自动释放。",
-    "default": 300.0,
-    "invisible": true
-  },
-  "wakeup_interval_min": {
-    "description": "全局唤醒间隔下限（秒）",
-    "type": "float",
-    "hint": "上一条完整回复结束后，下一条排队唤醒开始思考前的最小等待时间；运行时不会低于 1 秒。",
-    "default": 1.0,
-    "invisible": true
-  },
-  "wakeup_interval_max": {
-    "description": "全局唤醒间隔上限（秒）",
-    "type": "float",
-    "hint": "上一条完整回复结束后，下一条排队唤醒开始思考前的最大等待时间；默认与下限形成 1～2 秒随机间隔。",
-    "default": 2.0,
-    "invisible": true
-  },
-  "queue_full_notice": {
-    "description": "唤醒队列满时的提示文案",
-    "type": "string",
-    "hint": "全局队列最多保留 3 条等待中的唤醒，满时丢弃最新消息；填写文案会在丢弃时发送给对应会话，留空则不发送。",
-    "default": "队列繁忙，请稍后再试。",
-    "invisible": true
-  },
   "enable_message_merge": {
     "description": "启用分段消息合并窗口",
     "type": "bool",
-    "hint": "收到人类唤醒消息后开启短窗口，把同一用户后续发送的纯文本合并进同一次 LLM 请求，避免分段消息被拆成多次回复。",
+    "hint": "收到人类唤醒消息后开启短窗口，把同一用户后续发送的分段消息（纯文本、图片/文件）合并进同一次 LLM 请求，避免分段消息被拆成多次回复；规划中收到补充会终止旧规划并合并重生成。",
     "default": true
   },
   "merge_window_seconds": {
@@ -164,13 +40,6 @@
     "default": true,
     "invisible": true
   },
-  "merge_continuation_ttl": {
-    "description": "规划期补充消息的保留时长（秒）",
-    "type": "float",
-    "hint": "窗口关闭后、回复生成期间收到的同用户无唤醒词补充，会暂存并在该用户下一次唤醒时并入；超过此时长后失效。设为 0 关闭该保留行为。",
-    "default": 120.0,
-    "invisible": true
-  },
   "merge_task_cancel": {
     "description": "合并时取消旧 pipeline 任务",
     "type": "bool",
@@ -178,18 +47,17 @@
     "default": false,
     "invisible": true
   },
-  "protect_user_media_focus": {
-    "description": "启用请求上下文清洗",
+  "enable_self_reply_mark": {
+    "description": "启用 bot 自回复归属标记",
     "type": "bool",
-    "hint": "开启后，每次请求都会从 LLM 上下文中剔除机器人自己历史消息里的图片/文件，并移除其它插件注入的上一轮自发表情包描述（如 <recent_sent_meme>），避免模型把机器人自己的表情包当成用户刚发的图。",
-    "default": true,
-    "invisible": true
+    "hint": "开启后记录机器人最近几分钟发送的文本与图片/文件，并在每次 LLM 请求前注入客观归属标记，让模型正确区分机器人自己发送的内容与用户发送的内容。",
+    "default": true
   },
-  "strip_self_media_from_context": {
-    "description": "从 LLM 上下文剔除机器人自己的图片/文件",
-    "type": "bool",
-    "hint": "每次请求都从历史 assistant 消息中移除图片/文件组件，防止模型在纯文字消息（如问候）时仍看到机器人自己发过的表情包而继续回复表情包话题。",
-    "default": true,
+  "self_reply_mark_minutes": {
+    "description": "自回复标记窗口时长（分钟）",
+    "type": "float",
+    "hint": "只标记最近 N 分钟内机器人发送的内容；设为 0 关闭标记窗口。",
+    "default": 5.0,
     "invisible": true
   },
   "strip_recent_self_meme_context": {
@@ -209,7 +77,7 @@
   "enable_content_guard": {
     "description": "启用群聊内容防护",
     "type": "bool",
-    "hint": "在 LLM 请求前和消息发送前拦截配置词库命中及常见诱导绕过请求。",
+    "hint": "在 LLM 请求前拦截配置词库命中及常见诱导绕过请求。",
     "default": true
   },
   "content_guard_mode": {

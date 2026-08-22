@@ -71,6 +71,7 @@ def _install_astrbot_stubs() -> None:
             "event_message_type",
             "on_waiting_llm_request",
             "on_llm_request",
+            "on_llm_response",
             "on_decorating_result",
             "after_message_sent",
         }
@@ -118,9 +119,10 @@ def _import_plugin_as_package() -> None:
 
     for module_name in (
         "content_guard",
-        "image_renderer",
-        "pipelines",
-        "segmentation",
+        "merge_guards",
+        "merge_window",
+        "reply_coordinator",
+        "self_reply_marker",
         "main",
     ):
         module = importlib.import_module(f"{package_name}.{module_name}")

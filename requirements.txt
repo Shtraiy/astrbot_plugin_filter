@@ -1,2 +1,2 @@
 # Optional dependency for structured-list image rendering.
-Pillow>=10.0.0
+# No runtime dependencies required.

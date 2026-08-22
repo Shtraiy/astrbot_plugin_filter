@@ -7,8 +7,11 @@ from main import LanguageLogicOptimizer
 
 
 class FakeContext:
+    def __init__(self):
+        self.sent = []
+
     async def send_message(self, origin, chain):
-        pass
+        self.sent.append((origin, chain))
 
 
 class FakeEvent:
@@ -27,6 +30,7 @@ class FakeEvent:
         self.message_str = text
         self.request_id = request_id
         self._wake = wake
+        self.is_at_or_wake_command = wake
         self.stopped = False
         self._result = None
         self._extras = {}
@@ -51,6 +55,9 @@ class FakeEvent:
     def set_extra(self, key, value):
         self._extras[key] = value
 
+    def set_result(self, result):
+        self._result = result
+
     def get_result(self):
         return self._result
 
@@ -63,30 +70,25 @@ def make_optimizer(**overrides):
         "merge_max_messages": 5,
         "merge_max_chars": 2000,
         "merge_ignore_prefixes": "/,!",
-        "merge_continuation_ttl": 120.0,
+        "merge_include_media": True,
         "merge_task_cancel": False,
+        "enable_self_reply_mark": True,
+        "self_reply_mark_minutes": 5.0,
+        "strip_recent_self_meme_context": True,
+        "guard_own_media_attribution": True,
         "enable_content_guard": False,
-        "enable_llm_style": False,
-        "enable_llm_segment": False,
-        "enable_de_ai_flavor": False,
-        "enable_image_render": False,
-        "multi_message": False,
-        "gate_seconds": 0.0,
-        "gate_ttl_seconds": 300.0,
-        "wakeup_interval_min": 1.0,
-        "wakeup_interval_max": 1.0,
+        "content_guard_mode": "balanced",
+        "content_guard_block_terms": "",
+        "onboarding_guard_minutes": 30.0,
+        "onboarding_guard_messages": 20,
     }
     optimizer.config.update(overrides)
     optimizer.context = FakeContext()
     optimizer._pending_tasks = set()
-    optimizer._reply_locks = {}
-    optimizer._gates = {}
-    optimizer._pending_send = None
-    optimizer._pending_sends = {}
     optimizer._onboarding_states = {}
     optimizer._message_merger = None
     optimizer._reply_coordinator = None
-    optimizer._message_dispatcher = None
+    optimizer._self_reply_marker = None
     optimizer._get_merge_window_seconds = lambda: 0.05
     return optimizer
 
@@ -97,9 +99,7 @@ def test_two_segments_merge_into_one_wake():
     second = FakeEvent("u1", "group:1", "我觉得可爱的表情包不错", wake=False)
 
     async def run():
-        first_task = asyncio.create_task(
-            optimizer.on_waiting_llm_request(first)
-        )
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
         await asyncio.sleep(0.05)
         await optimizer.on_message(second)
         await first_task
@@ -117,112 +117,105 @@ def test_wake_followup_during_window_is_merged_and_stopped():
     second = FakeEvent("u1", "group:1", "@bot 第二段", wake=True)
 
     async def run():
-        first_task = asyncio.create_task(
-            optimizer.on_waiting_llm_request(first)
-        )
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
         await asyncio.sleep(0.05)
-        await optimizer.on_message(second)
         await optimizer.on_waiting_llm_request(second)
-        assert second.stopped
         await first_task
-        return first.message_str
+        return first.message_str, second.stopped
 
-    merged = asyncio.run(run())
+    merged, stopped = asyncio.run(run())
 
-    assert "第二段" in merged
-    assert "@bot" not in merged
+    assert merged == "第一段\n第二段"
+    assert stopped is True
 
 
-def test_planning_followup_supersedes_old_event():
+def test_planning_supplement_supersedes_and_regenerates():
     optimizer = make_optimizer()
-    first = FakeEvent("u1", "group:1", "第一段", wake=True, request_id="first")
-    second = FakeEvent(
-        "u1",
-        "group:1",
-        "@bot 第二段",
-        wake=True,
-        request_id="second",
-    )
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    new = FakeEvent("u1", "group:1", "补充", wake=True)
 
     async def run():
-        await optimizer.on_waiting_llm_request(first)
-        await optimizer.on_waiting_llm_request(second)
-        return first, second
+        await optimizer.on_waiting_llm_request(old)  # sleep 打桩为 0，直接 planning
+        await optimizer.on_waiting_llm_request(new)
+        return new.message_str, old.stopped
 
-    first, second = asyncio.run(run())
+    merged, stopped = asyncio.run(run())
 
-    assert first.stopped
-    assert second.message_str.startswith("第一段")
-    assert "第二段" in second.message_str
-    assert optimizer._get_reply_coordinator().active_event is second
+    assert merged == "第一段\n补充"
+    assert stopped is True
 
 
-def test_merged_text_still_goes_through_content_guard():
+def test_group_non_wake_supplement_promoted_during_planning():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    follow = FakeEvent("u1", "group:1", "补充", wake=False)
+
+    async def run():
+        await optimizer.on_waiting_llm_request(old)
+        await optimizer.on_message(follow)
+        return follow.is_at_or_wake_command
+
+    assert asyncio.run(run()) is True
+
+
+def test_content_guard_blocks_merged_text():
     optimizer = make_optimizer(
         enable_content_guard=True,
-        content_guard_mode="balanced",
-        content_guard_block_terms="可爱",
+        content_guard_block_terms="违禁词",
     )
-    first = FakeEvent("u1", "group:1", "第一段", wake=True)
-    second = FakeEvent("u1", "group:1", "可爱的第二段", wake=False)
+    event = FakeEvent("u1", "group:1", "第一段\n违禁词", wake=True)
+    req = SimpleNamespace(prompt="第一段\n违禁词")
 
     async def run():
-        first_task = asyncio.create_task(
-            optimizer.on_waiting_llm_request(first)
-        )
-        await asyncio.sleep(0.05)
-        await optimizer.on_message(second)
-        await first_task
-        await optimizer.on_llm_request(first, None)
-        return first
+        await optimizer.on_waiting_llm_request(event)
+        await optimizer.on_llm_request(event, req)
+        return event.stopped
 
-    first = asyncio.run(run())
-
-    assert first.stopped
+    assert asyncio.run(run()) is True
 
 
-def test_image_followup_merged_into_owner_chain():
+def test_on_llm_response_guard_stops_superseded():
     optimizer = make_optimizer()
-    first = FakeEvent("u1", "group:1", "看看这张图", wake=True)
-    img = Image("http://example.com/a.png")
-    second = FakeEvent("u1", "group:1", chain=[img], wake=False)
+    event = FakeEvent("u1", "group:1", "旧", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(event))
+    optimizer._get_reply_coordinator().supersede_active_event(event)
 
     async def run():
-        first_task = asyncio.create_task(
-            optimizer.on_waiting_llm_request(first)
-        )
-        await asyncio.sleep(0.05)
-        await optimizer.on_message(second)
-        await first_task
-        return first
+        await optimizer.on_llm_response_guard(event, object())
+        return event.stopped
 
-    first = asyncio.run(run())
+    assert asyncio.run(run()) is True
 
-    assert any(
-        getattr(comp, "url", "") == "http://example.com/a.png"
-        for comp in first.message_obj.message
+
+def test_self_reply_mark_injected_on_llm_request():
+    optimizer = make_optimizer()
+    marker = optimizer._get_self_reply_marker()
+    sent = FakeEvent("u1", "group:1")
+    sent.set_result(SimpleNamespace(chain=[Plain("好的"), Image("file:///meme.png")]))
+    marker.record_sent_reply(sent)
+
+    event = FakeEvent("u1", "group:1", "你刚才发了什么", wake=True)
+    req = SimpleNamespace(
+        prompt="你刚才发了什么",
+        extra_user_content_parts=[],
     )
 
+    asyncio.run(optimizer.on_llm_request(event, req))
 
-def test_planning_continuation_merges_into_next_wake():
-    optimizer = make_optimizer(merge_continuation_ttl=120.0)
-    first = FakeEvent("u1", "group:1", "第一段", wake=True)
-    supplement = FakeEvent("u1", "group:1", "补充内容", wake=False)
-    next_wake = FakeEvent("u1", "group:1", "继续", wake=True)
+    injected = any(
+        "机器人自己" in getattr(part, "text", "")
+        for part in req.extra_user_content_parts
+    )
+    assert injected is True
 
-    async def run():
-        first_task = asyncio.create_task(
-            optimizer.on_waiting_llm_request(first)
-        )
-        await asyncio.sleep(0.05)
-        await first_task
-        await optimizer.on_message(supplement)
-        optimizer._get_message_merger().clear_owner(first)
-        optimizer._release_gate(first)
-        await optimizer.on_waiting_llm_request(next_wake)
-        return next_wake
 
-    next_wake = asyncio.run(run())
+def test_superseded_result_discarded_on_decoration():
+    optimizer = make_optimizer()
+    event = FakeEvent("u1", "group:1", "旧", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(event))
+    optimizer._get_reply_coordinator().supersede_active_event(event)
+    event.set_result(SimpleNamespace(chain=[Plain("旧回复")]))
 
-    assert next_wake.message_str.startswith("第一段\n补充内容")
-    assert "继续" in next_wake.message_str
+    asyncio.run(optimizer.on_decorating_result(event))
+
+    assert event.get_result().chain == []

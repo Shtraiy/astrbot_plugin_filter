@@ -11,6 +11,7 @@ class FakeEvent:
         self.unified_msg_origin = origin
         self.message_str = text
         self._wake = wake
+        self.is_at_or_wake_command = wake
         self._chain = chain if chain is not None else ([Plain(text)] if text else [])
         self.message_obj = SimpleNamespace(message=self._chain)
         self.stopped = False
@@ -35,12 +36,12 @@ def make_manager(**config):
     )
 
 
-def test_capture_appends_same_user_text_during_window():
+def test_capture_only_during_window_phase():
     manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
 
     assert manager.start_window(owner)
-    assert manager.capture(FakeEvent("u1", "group:1", "第二段"))
+    assert manager.capture(FakeEvent("u1", "group:1", "第二段", wake=False))
 
     assert manager.finalize_window(owner) == "第一段\n第二段"
 
@@ -93,224 +94,142 @@ def test_capture_skips_non_plain_messages():
     assert manager.finalize_window(owner) == "第一段"
 
 
-def test_capture_respects_ignore_prefixes():
+def test_capture_skips_wake_followups():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+    follow = FakeEvent("u1", "group:1", "@bot 第二段", wake=True)
+    follow.is_at_or_wake_command = True
+
+    assert not manager.capture(follow)
+
+
+def test_capture_ignores_ignore_prefix():
     manager = make_manager(merge_ignore_prefixes="/,!")
     owner = FakeEvent("u1", "group:1", "第一段")
     manager.start_window(owner)
 
-    assert not manager.capture(FakeEvent("u1", "group:1", "/help"))
-    assert not manager.capture(FakeEvent("u1", "group:1", "!ping"))
-    assert manager.capture(FakeEvent("u1", "group:1", "普通消息"))
+    assert not manager.capture(FakeEvent("u1", "group:1", "/命令"))
+    assert not manager.capture(FakeEvent("u1", "group:1", "!命令"))
+    assert manager.capture(FakeEvent("u1", "group:1", "正常补充"))
 
 
-def test_capture_respects_message_cap():
-    manager = make_manager(merge_max_messages=2)
-    owner = FakeEvent("u1", "group:1", "a")
+def test_capture_enforces_message_limit():
+    manager = make_manager(merge_max_messages=1)
+    owner = FakeEvent("u1", "group:1", "第一段")
     manager.start_window(owner)
 
-    assert manager.capture(FakeEvent("u1", "group:1", "b"))
-    assert manager.capture(FakeEvent("u1", "group:1", "c"))
-    assert not manager.capture(FakeEvent("u1", "group:1", "d"))
-    assert manager.finalize_window(owner) == "a\nb\nc"
+    assert manager.capture(FakeEvent("u1", "group:1", "第二段"))
+    assert not manager.capture(FakeEvent("u1", "group:1", "第三段"))
 
 
-def test_capture_respects_char_cap():
+def test_capture_enforces_char_limit():
     manager = make_manager(merge_max_chars=10)
-    owner = FakeEvent("u1", "group:1", "abcdef")
-    manager.start_window(owner)
-
-    assert not manager.capture(FakeEvent("u1", "group:1", "ghijkl"))
-    assert manager.finalize_window(owner) == "abcdef"
-
-
-def test_capture_strips_leading_mention():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "可以")
-    manager.start_window(owner)
-
-    manager.capture(FakeEvent("u1", "group:1", "@bot 我觉得可爱"))
-
-    assert manager.finalize_window(owner) == "可以\n我觉得可爱"
-
-
-def test_finalize_moves_to_planning_and_take_consumes():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
-    manager.start_window(owner)
-    manager.finalize_window(owner)
-
-    follow = FakeEvent("u1", "group:1", "第二段")
-    result = manager.take_planning(follow)
-
-    assert result is not None
-    old_event, text, _media, _task = result
-    assert old_event is owner
-    assert text == "第一段"
-    assert manager.take_planning(follow) is None
-
-
-def test_take_planning_skips_stopped_owner():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
-    manager.start_window(owner)
-    manager.finalize_window(owner)
-    owner.stopped = True
-
-    follow = FakeEvent("u1", "group:1", "第二段")
-
-    assert manager.take_planning(follow) is None
-
-
-def test_start_window_skips_events_without_sender():
-    manager = make_manager()
-
-    assert not manager.start_window(FakeEvent("", "group:1", "a"))
-
-
-def test_join_text_strips_leading_mention():
-    assert MergeWindowManager.join_text("第一段", "@bot 第二段") == "第一段\n第二段"
-    assert MergeWindowManager.join_text("", "@bot 第二段") == "第二段"
-
-
-def test_capture_merges_image_followup():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "看看这张图")
-    manager.start_window(owner)
-    img = Image("http://example.com/a.png")
-
-    assert manager.capture(FakeEvent("u1", "group:1", chain=[img]))
-    assert manager.finalize_window(owner) == "看看这张图"
-    assert owner.message_obj.message[-1] is img
-
-
-def test_capture_merges_text_with_image():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
-    manager.start_window(owner)
-    img = Image("http://example.com/a.png")
-
-    assert manager.capture(
-        FakeEvent("u1", "group:1", chain=[Plain("配图"), img])
-    )
-    assert manager.finalize_window(owner) == "第一段\n配图"
-    assert owner.message_obj.message[-1] is img
-
-
-def test_capture_merges_file_followup():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "看文件")
-    manager.start_window(owner)
-    file_comp = File("doc.pdf")
-
-    assert manager.capture(FakeEvent("u1", "group:1", chain=[file_comp]))
-    assert manager.finalize_window(owner) == "看文件"
-    assert owner.message_obj.message[-1] is file_comp
-
-
-def test_capture_skips_media_when_disabled():
-    manager = make_manager(merge_include_media=False)
     owner = FakeEvent("u1", "group:1", "第一段")
     manager.start_window(owner)
 
-    assert not manager.capture(
-        FakeEvent("u1", "group:1", chain=[Image("http://example.com/a.png")])
-    )
-    assert manager.finalize_window(owner) == "第一段"
+    assert not manager.capture(FakeEvent("u1", "group:1", "这段文字超过十个字肯定"))
 
 
-def test_capture_skips_quoted_media():
+def test_merge_wake_appends_wake_followup_during_window():
     manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
     manager.start_window(owner)
+    follow = FakeEvent("u1", "group:1", "@bot 第二段", wake=True)
 
-    assert not manager.capture(
-        FakeEvent("u1", "group:1", chain=[SimpleNamespace(type="Reply")])
-    )
-    assert manager.finalize_window(owner) == "第一段"
-
-
-def test_take_planning_carries_media():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
-    manager.start_window(owner)
-    img = Image("http://example.com/a.png")
-    manager.capture(FakeEvent("u1", "group:1", chain=[img]))
-    manager.finalize_window(owner)
-
-    result = manager.take_planning(FakeEvent("u1", "group:1", "第二段"))
-
-    assert result is not None
-    _old_event, text, media, _task = result
-    assert text == "第一段"
-    assert media == [img]
-
-
-def test_capture_skips_wake_followups():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
-    manager.start_window(owner)
-
-    assert not manager.capture(FakeEvent("u1", "group:1", "第二段", wake=True))
-    assert manager.finalize_window(owner) == "第一段"
-
-
-def test_merge_wake_appends_during_window():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
-    manager.start_window(owner)
-
-    assert manager.merge_wake(FakeEvent("u1", "group:1", "@bot 第二段", wake=True))
+    assert manager.merge_wake(follow)
     assert manager.finalize_window(owner) == "第一段\n第二段"
 
 
-def test_capture_works_during_planning_phase():
+def test_promote_planning_enables_group_followup():
     manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
     manager.start_window(owner)
     manager.finalize_window(owner)
+    follow = FakeEvent("u1", "group:1", "补充", wake=False)
 
-    assert manager.capture(FakeEvent("u1", "group:1", "补充内容"))
-    result = manager.take_planning(FakeEvent("u1", "group:1", "第二段"))
-
-    assert result is not None
-    _old_event, text, _media, _task = result
-    assert text == "第一段\n补充内容"
+    assert manager.promote_planning(follow)
+    assert follow.is_at_or_wake_command is True
 
 
-def test_clear_owner_keeps_continuation_when_captures_exist():
+def test_promote_planning_rejects_wake_and_other_users():
     manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
     manager.start_window(owner)
     manager.finalize_window(owner)
-    manager.capture(FakeEvent("u1", "group:1", "补充内容"))
-    manager.clear_owner(owner)
+    wake_follow = FakeEvent("u1", "group:1", "@bot 补充", wake=True)
+    wake_follow.is_at_or_wake_command = True
 
-    result = manager.take_planning(FakeEvent("u1", "group:1", "第二段"))
-
-    assert result is not None
-    old_event, text, _media, _task = result
-    assert old_event is None
-    assert text == "第一段\n补充内容"
+    assert not manager.promote_planning(wake_follow)
+    assert not manager.promote_planning(FakeEvent("u2", "group:1", "别人的", wake=False))
 
 
-def test_clear_owner_drops_state_without_captures():
+def test_promote_planning_requires_planning_phase():
     manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段")
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+
+    assert not manager.promote_planning(FakeEvent("u1", "group:1", "窗口期", wake=False))
+
+
+def test_take_planning_returns_accumulated_text_and_rearm_supports_recursion():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
     manager.start_window(owner)
     manager.finalize_window(owner)
-    manager.clear_owner(owner)
+    follow = FakeEvent("u1", "group:1", "补充", wake=False)
 
-    assert manager.take_planning(FakeEvent("u1", "group:1", "第二段")) is None
+    old, text, media, task = manager.take_planning(follow)
+    assert old is owner
+    assert text == "第一段"
+    assert media == []
+    assert task is None
+
+    merged = manager.join_text(text, follow.message_str)
+    assert merged == "第一段\n补充"
+    assert manager.rearm_planning(follow, merged)
+
+    old2, text2, _, _ = manager.take_planning(follow)
+    assert old2 is follow
+    assert text2 == "第一段\n补充"
 
 
-def test_continuation_expires_after_ttl():
-    now = [100.0]
-    manager = make_manager(merge_continuation_ttl=30.0, now=lambda: now[0])
-    owner = FakeEvent("u1", "group:1", "第一段")
+def test_take_planning_requires_planning_phase():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+
+    assert manager.start_window(owner)
+    assert manager.take_planning(FakeEvent("u1", "group:1", "窗口期")) is None
+
+
+def test_media_merge_attaches_to_owner():
+    manager = make_manager(merge_include_media=True)
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+    image = Image("file:///a.png")
+
+    assert manager.capture(
+        FakeEvent("u1", "group:1", "看图", chain=[Plain("看图"), image])
+    )
+    merged = manager.finalize_window(owner)
+
+    assert merged == "第一段\n看图"
+    assert image in owner.message_obj.message
+
+
+def test_clear_owner_drops_state():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
     manager.start_window(owner)
     manager.finalize_window(owner)
-    manager.capture(FakeEvent("u1", "group:1", "补充内容"))
-    manager.clear_owner(owner)
-    now[0] += 31.0
 
-    assert manager.take_planning(FakeEvent("u1", "group:1", "第二段")) is None
+    manager.clear_owner(owner)
+    assert not manager.promote_planning(FakeEvent("u1", "group:1", "补充", wake=False))
+
+
+def test_join_text_strips_leading_mention():
+    manager = make_manager()
+
+    assert manager.join_text("第一段", "@bot 第二段") == "第一段\n第二段"
+    assert manager.join_text("第一段", "第二段") == "第一段\n第二段"
+    assert manager.join_text("", "第二段") == "第二段"

@@ -5,128 +5,117 @@ from _astrbot_plugin_filter_test.reply_coordinator import ReplyCoordinator
 
 
 class FakeEvent:
-    def __init__(
-        self,
-        origin="group:1",
-        *,
-        request_id=None,
-        result=None,
-    ):
+    def __init__(self, sender, origin, *, wake=True):
+        self.sender = sender
         self.unified_msg_origin = origin
-        self.request_id = request_id
+        self.is_at_or_wake_command = wake
         self.stopped = False
-        self._result = result
+        self._result = None
 
-    def is_wake_up(self):
-        return True
+    def get_sender_id(self):
+        return self.sender
 
     def stop_event(self):
         self.stopped = True
+
+    def is_stopped(self):
+        return self.stopped
+
+    def set_result(self, result):
+        self._result = result
 
     def get_result(self):
         return self._result
 
 
-def make_coordinator(now=None):
+def make_coordinator():
     return ReplyCoordinator(
-        get_gate_seconds=lambda: 0.0,
-        get_gate_ttl_seconds=lambda: 300.0,
-        get_wakeup_interval=lambda: (0.0, 0.0),
-        event_is_wake_up=lambda event: bool(event.is_wake_up()),
-        now=now,
-    )
-
-
-def test_user_message_is_queued_without_preempting_active_reply():
-    coordinator = make_coordinator()
-    active = FakeEvent(request_id="active")
-    user = FakeEvent(request_id="user")
-
-    async def scenario():
-        assert await coordinator.admit_wakeup(active)
-        user_task = asyncio.create_task(coordinator.admit_wakeup(user))
-        await asyncio.sleep(0)
-        assert not user_task.done()
-        assert not user.stopped
-        assert coordinator.active_event is active
-
-        assert not coordinator.session_cancelled(
-            SimpleNamespace(
-                owner_event=active,
-                gate_tracked=True,
-            )
+        event_is_wake_up=lambda event: getattr(
+            event, "is_at_or_wake_command", False
         )
-
-        coordinator.finish_active(active)
-        assert await user_task
-        assert coordinator.active_event is user
-
-    asyncio.run(scenario())
-
-
-def test_late_result_after_ttl_is_discarded():
-    now = [1000.0]
-    coordinator = make_coordinator(now=lambda: now[0])
-    active = FakeEvent(result=SimpleNamespace(chain=["stale"]))
-
-    async def scenario():
-        assert await coordinator.admit_wakeup(active)
-        now[0] += 301
-        assert coordinator.discard_superseded_result(active)
-
-    asyncio.run(scenario())
-    assert active.stopped
-    assert active.get_result().chain == []
-
-
-def test_reply_session_releases_lock_and_active_slot():
-    coordinator = make_coordinator()
-    event = FakeEvent()
-
-    async def scenario():
-        assert await coordinator.admit_wakeup(event)
-        session = await coordinator.acquire_reply(event)
-        assert session.reply_lock.locked()
-        coordinator.release(session)
-        await asyncio.sleep(0)
-        return session.reply_lock.locked(), coordinator.active_event
-
-    locked, active = asyncio.run(scenario())
-    assert not locked
-    assert active is None
-
-
-def test_session_is_cancelled_when_active_slot_expires():
-    now = [1000.0]
-    coordinator = make_coordinator(now=lambda: now[0])
-    event = FakeEvent(request_id="active")
-
-    async def scenario():
-        assert await coordinator.admit_wakeup(event)
-        session = await coordinator.acquire_reply(event)
-        now[0] += 301
-        return coordinator.session_cancelled(session)
-
-    assert asyncio.run(scenario())
-
-
-def test_cancelled_event_ids_stay_bounded():
-    now = [100.0]
-    coordinator = ReplyCoordinator(
-        get_gate_seconds=lambda: 0.0,
-        get_gate_ttl_seconds=lambda: 1.0,
-        get_wakeup_interval=lambda: (0.0, 0.0),
-        event_is_wake_up=lambda event: True,
-        now=lambda: now[0],
-        max_gate_states=4,
     )
-    events = [FakeEvent(request_id=f"event-{index}") for index in range(10)]
 
-    async def scenario():
-        for event in events:
-            assert await coordinator.admit_wakeup(event)
-            now[0] += 2.0
-            _ = coordinator.active_event  # triggers expiry cleanup
-        return len(coordinator._cancelled_event_ids)
 
-    assert asyncio.run(scenario()) <= 4
+def test_admit_tracks_per_session_and_idempotent():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+
+    assert asyncio.run(coordinator.admit_wakeup(a)) is True
+    assert asyncio.run(coordinator.admit_wakeup(a)) is True  # idempotent
+
+    b = FakeEvent("u1", "group:2")
+    assert asyncio.run(coordinator.admit_wakeup(b)) is True  # other session parallel
+
+
+def test_admit_skips_non_wake_events():
+    coordinator = make_coordinator()
+    event = FakeEvent("u1", "group:1", wake=False)
+
+    assert asyncio.run(coordinator.admit_wakeup(event)) is True
+    assert coordinator.active_by_session == {}
+
+
+def test_supersede_marks_cancelled_stops_and_clears():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+    asyncio.run(coordinator.admit_wakeup(a))
+
+    assert coordinator.supersede_active_event(a) is True
+    assert coordinator.is_superseded(a)
+    assert a.stopped is True
+    assert coordinator.is_session_busy(a) is False
+
+
+def test_supersede_rejects_unrelated_event():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+    b = FakeEvent("u1", "group:1")
+    asyncio.run(coordinator.admit_wakeup(a))
+
+    assert coordinator.supersede_active_event(b) is False
+    assert not coordinator.is_superseded(b)
+
+
+def test_session_busy_only_for_other_active_event():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+    asyncio.run(coordinator.admit_wakeup(a))
+    b = FakeEvent("u1", "group:1")
+
+    assert coordinator.is_session_busy(b) is True
+    assert coordinator.is_session_busy(a) is False
+
+
+def test_discard_superseded_result_clears_chain():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+    asyncio.run(coordinator.admit_wakeup(a))
+    coordinator.supersede_active_event(a)
+    a.set_result(SimpleNamespace(chain=[object()]))
+
+    assert coordinator.discard_superseded_result(a) is True
+    assert a.get_result().chain == []
+
+
+def test_discard_superseded_result_noop_for_normal_event():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+    asyncio.run(coordinator.admit_wakeup(a))
+
+    assert coordinator.discard_superseded_result(a) is False
+
+
+def test_finish_active_clears_session():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+    asyncio.run(coordinator.admit_wakeup(a))
+
+    assert coordinator.finish_active(a) is True
+    assert coordinator.is_session_busy(a) is False
+
+
+def test_finish_active_noop_for_unknown_event():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+
+    assert coordinator.finish_active(a) is False
