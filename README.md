@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.1-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.2-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -25,7 +25,7 @@
 - 按会话独立：不同会话可并行回复，互不排队、无全局闸门。
 - 记录机器人最近发送的文本与媒体，并在每次请求前注入客观归属标记（`<self_reply_mark>`），保留 assistant 历史媒体的同时纠正归属误判。
 - 继续剔除 meme_manager 等插件拼进用户消息的 `<recent_sent_meme>` 描述，防止模型误以为用户刚发了表情包。
-- 纯文字用户消息注入图片归属提示（`<media_note>`）；引用历史图片提问时注入识图提示（`<referenced_image_note>`），让模型把被引用的图当作询问对象来分析。
+- 用户消息注入媒体归属提示：有图时注入 `<user_media_note>`（当前附件是用户的、历史 assistant 图片是机器人自己的）、引用历史图片时注入 `<referenced_image_note>`（被引用图是询问对象）、纯文字无图时注入 `<media_note>`。
 - 群聊内容防护：词库拦截 + 诱导绕过检测 + 新群聊严格模式。
 
 ## 与 livingmemory 的联动
@@ -92,6 +92,9 @@
 **为什么我引用机器人自己发的图提问，它却说"没看到我发新图片"？**
 这是旧版本的提示误判：引用里的图曾被当作"纯文字消息"处理，注入的提示让模型以为用户没发图。v3.0.0 修复后，引用历史图片的消息会注入 `<referenced_image_note>`，明确告诉模型"被引用的图就是用户询问的对象"，正常走识图。
 
+**为什么机器人发图后，模型还是把我发的图和它自己发的表情包混在一起？**
+当用户本轮确实发图时，请求里同时存在用户的附件和历史上机器人自己发的表情包，旧逻辑此时不注入任何提示，模型分不清归属。v3.0.2 起，用户有图时也会注入 `<user_media_note>`，明确"本轮附件是用户的、历史 assistant 图片是机器人自己的"。
+
 **群聊里不带 @ 的补充消息能合并吗？**
 能。窗口期直接并入；规划期会被自动提升为唤醒并合并重生成。其他用户的发言不会触发。
 
@@ -99,6 +102,10 @@
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.2
+
+- **修复**：用户本轮发图时注入 `<user_media_note>` 归属提示（此前只对纯文字消息提示，导致模型把历史中机器人自己发的表情包当成用户本轮发送的）；`<self_reply_mark>` 补充"历史 assistant 图片属于机器人"的确定性声明。
 
 ### v3.0.1
 

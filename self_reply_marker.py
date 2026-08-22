@@ -40,6 +40,14 @@ _REFERENCED_IMAGE_NOTE = (
     "但不要声称用户刚刚发送了它。"
     "</referenced_image_note>"
 )
+_USER_MEDIA_NOTE = (
+    "<user_media_note>"
+    "用户本轮发送了图片/文件，这些图片/文件是用户发送的。"
+    "上下文历史中 assistant（机器人）消息里的图片/文件是机器人自己发送的，不属于用户。"
+    "请优先识别并回答用户本轮发送的图片；"
+    "不要把机器人自己在历史中发送的表情包/图片描述成用户本轮发送的。"
+    "</user_media_note>"
+)
 
 
 @dataclass
@@ -134,7 +142,10 @@ class SelfReplyMarker:
                 lines.append(f"- [文本] {snippet}")
             for desc in entry.media:
                 lines.append(f"- {desc}")
-        lines.append("用户本轮消息中出现的媒体/文件才属于用户。")
+        lines.append(
+            "上下文历史中 assistant（机器人）消息里的图片/文件是机器人自己发送的；"
+            "用户本轮消息附带的图片/文件才是用户发送的。"
+        )
         lines.append(
             "任何记忆、总结或历史中声称'用户发送过图片/表情包'的内容若与本标记冲突，以本标记为准。"
         )
@@ -254,6 +265,11 @@ def append_referenced_image_note(req: Any) -> bool:
     return _append_note_part(req, _REFERENCED_IMAGE_NOTE)
 
 
+def append_user_media_note(req: Any) -> bool:
+    """Append a note clarifying which media in the request belongs to the user."""
+    return _append_note_part(req, _USER_MEDIA_NOTE)
+
+
 def _append_note_part(req: Any, note: str) -> bool:
     parts = getattr(req, "extra_user_content_parts", None)
     if not isinstance(parts, list):
@@ -339,6 +355,7 @@ __all__ = [
     "SelfReplyMarker",
     "append_text_only_media_note",
     "append_referenced_image_note",
+    "append_user_media_note",
     "describe_contexts",
     "has_referenced_image",
     "has_user_media",

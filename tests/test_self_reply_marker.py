@@ -6,6 +6,7 @@ from _astrbot_plugin_filter_test.self_reply_marker import (
     SelfReplyMarker,
     append_referenced_image_note,
     append_text_only_media_note,
+    append_user_media_note,
     has_referenced_image,
     has_user_media,
     strip_recent_self_meme_context,
@@ -198,3 +199,12 @@ def test_append_referenced_image_note():
 
     assert append_referenced_image_note(req) is True
     assert "用户引用了一张历史消息中的图片" in req.extra_user_content_parts[0].text
+
+
+def test_append_user_media_note():
+    req = SimpleNamespace(extra_user_content_parts=[])
+
+    assert append_user_media_note(req) is True
+    text = req.extra_user_content_parts[0].text
+    assert "用户本轮发送了图片/文件" in text
+    assert "assistant" in text

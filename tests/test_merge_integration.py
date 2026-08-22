@@ -229,6 +229,26 @@ def test_quoted_image_message_gets_recognition_note_not_text_only_note():
     assert not any("用户本条消息为纯文字" in text for text in texts)
 
 
+def test_user_media_message_gets_attribution_note():
+    optimizer = make_optimizer()
+    event = FakeEvent(
+        "u1",
+        "group:1",
+        chain=[Image("file:///user.png")],
+        wake=True,
+    )
+    req = SimpleNamespace(
+        prompt="[图片]",
+        extra_user_content_parts=[],
+    )
+
+    asyncio.run(optimizer.on_llm_request(event, req))
+
+    texts = [getattr(part, "text", "") for part in req.extra_user_content_parts]
+    assert any("用户本轮发送了图片/文件" in text for text in texts)
+    assert not any("用户本条消息为纯文字" in text for text in texts)
+
+
 def test_superseded_result_discarded_on_decoration():
     optimizer = make_optimizer()
     event = FakeEvent("u1", "group:1", "旧", wake=True)

@@ -20,6 +20,7 @@ from .self_reply_marker import (
     SelfReplyMarker,
     append_referenced_image_note,
     append_text_only_media_note,
+    append_user_media_note,
     has_referenced_image,
     has_user_media,
     strip_recent_self_meme_context,
@@ -184,7 +185,8 @@ class LanguageLogicOptimizer(Star):
                 except Exception:
                     user_has_media = False
                 if user_has_media:
-                    pass
+                    if append_user_media_note(req):
+                        logger.info("[自回复标记] 用户媒体消息，已注入归属提示")
                 else:
                     try:
                         user_has_ref_image = has_referenced_image(event)
