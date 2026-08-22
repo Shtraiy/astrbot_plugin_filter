@@ -1,6 +1,6 @@
 <div align="center">
 
-# AstrBot 回复优化大师
+# AstrBot 消息合并大师
 
 [![version](https://img.shields.io/badge/version-v3.0.0-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
@@ -38,7 +38,7 @@
 
 ## 配置
 
-配置入口：`AstrBot 管理面板 -> 插件 -> 回复优化大师 -> 配置`
+配置入口：`AstrBot 管理面板 -> 插件 -> 消息合并大师 -> 配置`
 
 ### 可见配置
 
