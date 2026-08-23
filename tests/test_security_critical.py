@@ -56,7 +56,6 @@ def make_optimizer(**config):
         "guard_own_media_attribution": True,
         **config,
     }
-    optimizer._pending_tasks = set()
     optimizer._onboarding_states = {}
     optimizer._message_merger = None
     optimizer._reply_coordinator = None

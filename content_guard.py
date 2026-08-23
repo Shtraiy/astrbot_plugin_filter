@@ -117,19 +117,6 @@ def evaluate_input(text: str, block_terms, *, strict: bool = False) -> GuardDeci
     return GuardDecision(ALLOW)
 
 
-def evaluate_output(text: str, block_terms, *, strict: bool = False) -> GuardDecision:
-    """Check final text immediately before it is sent to the group."""
-    if _matches_configured_term(text, block_terms):
-        return GuardDecision(BLOCK, "blocked_term")
-
-    normalized = normalize_for_scan(text)
-    if strict and _RISK_TARGET_RE.search(normalized) and (
-        _INJECTION_RE.search(normalized) or _OBFUSCATION_RE.search(normalized)
-    ):
-        return GuardDecision(BLOCK, "prompt_injection")
-    return GuardDecision(ALLOW)
-
-
 def is_group_origin(origin) -> bool:
     """Recognize common AstrBot group-origin formats without assuming one adapter."""
     if not origin:

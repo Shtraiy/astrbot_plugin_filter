@@ -43,7 +43,6 @@ class LanguageLogicOptimizer(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
         self.config = config
-        self._pending_tasks: set[asyncio.Task] = set()
         self._onboarding_guard: OnboardingGuard | None = None
         self._message_merger: MergeWindowManager | None = None
         self._reply_coordinator: ReplyCoordinator | None = None
@@ -428,12 +427,6 @@ class LanguageLogicOptimizer(Star):
             return 6.0
         return min(30.0, max(1.0, value))
 
-    def _track_task(self, task: asyncio.Task) -> None:
-        self._pending_tasks.add(task)
-        task.add_done_callback(self._pending_tasks.discard)
-        task.add_done_callback(_log_task_exception)
-
-
 _MISSING = object()
 
 
@@ -534,14 +527,3 @@ def _extract_input_text(event, req) -> str:
             if isinstance(value, str) and value.strip():
                 return value
     return ""
-
-
-def _log_task_exception(task: asyncio.Task) -> None:
-    try:
-        exc = task.exception()
-        if exc is not None:
-            logger.warning("[任务] 后台任务异常：%s", exc, exc_info=True)
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        pass

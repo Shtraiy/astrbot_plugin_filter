@@ -84,7 +84,6 @@ def make_optimizer(**overrides):
     }
     optimizer.config.update(overrides)
     optimizer.context = FakeContext()
-    optimizer._pending_tasks = set()
     optimizer._onboarding_states = {}
     optimizer._message_merger = None
     optimizer._reply_coordinator = None

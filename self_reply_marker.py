@@ -27,7 +27,6 @@ from .event_access import (
 )
 
 
-MAX_MARK_STATES = 4096
 MAX_MARK_ENTRIES = 8
 _MAX_TEXT_SNIPPET = 200
 
@@ -451,7 +450,6 @@ def _make_text_part(text: str) -> Any | None:
 
 __all__ = [
     "MAX_MARK_ENTRIES",
-    "MAX_MARK_STATES",
     "SelfReplyMarker",
     "append_text_only_media_note",
     "append_referenced_image_note",
