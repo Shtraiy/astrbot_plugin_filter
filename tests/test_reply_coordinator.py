@@ -86,6 +86,24 @@ def test_session_busy_only_for_other_active_event():
     assert coordinator.is_session_busy(a) is False
 
 
+def test_active_event_for_three_states():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+    b = FakeEvent("u1", "group:1")
+
+    # 无活跃事件
+    assert coordinator.active_event_for(a) is None
+
+    asyncio.run(coordinator.admit_wakeup(a))
+    # 活跃事件是自己
+    assert coordinator.active_event_for(a) is None
+    # 活跃事件是同会话的另一个事件
+    assert coordinator.active_event_for(b) is a
+
+    other_session = FakeEvent("u1", "group:2")
+    assert coordinator.active_event_for(other_session) is None
+
+
 def test_active_same_sender_distinguishes_users():
     coordinator = make_coordinator()
     a = FakeEvent("u1", "group:1")

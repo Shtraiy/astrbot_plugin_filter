@@ -6,6 +6,7 @@ import asyncio
 import math
 import re
 from collections.abc import Mapping
+from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.all import MessageChain
@@ -19,7 +20,11 @@ from .interruption_guard import (
     is_interruption_placeholder_text,
     scrub_interruption_placeholders,
 )
-from .merge_guards import stop_if_superseded
+from .merge_guards import (
+    is_correction_follow_up,
+    should_interrupt_running_reply,
+    stop_if_superseded,
+)
 from .merge_window import MergeWindowManager
 from .onboarding_guard import OnboardingGuard
 from .reply_coordinator import ReplyCoordinator
@@ -86,18 +91,30 @@ class LanguageLogicOptimizer(Star):
             return
         try:
             merger = self._get_message_merger()
+            coordinator = self._get_reply_coordinator()
             if merger.is_window_open(event):
                 merger.capture(event)
                 return
             if self._event_is_wake_up(event):
-                if self._get_reply_coordinator().active_same_sender(event):
+                if coordinator.active_same_sender(event):
                     # Same user woke again while their reply is still active:
                     # stop the running agent first so AstrBot 4.27's follow-up
                     # capture cannot swallow this message into the old planning.
+                    active = coordinator.active_event_for(event)
+                    if not self._should_interrupt_active_reply(event, active):
+                        # Provider 已开始调用：悬挂，让核心 follow-up 接管。
+                        if active is not None:
+                            merger.clear_state(active)
+                        return
                     self._request_agent_stop(event)
             if merger.planning_active(event):
                 # AstrBot 4.25+: stop the running agent before follow-up
                 # capture or our own hooks can race with the old planning.
+                active = coordinator.active_event_for(event)
+                if not self._should_interrupt_active_reply(event, active):
+                    if active is not None:
+                        merger.clear_state(active)
+                    return
                 self._request_agent_stop(event)
             if merger.promote_planning(event):
                 logger.info("[消息合并] 规划期补充消息已提升为唤醒，将合并重生成")
@@ -170,6 +187,13 @@ class LanguageLogicOptimizer(Star):
         coordinator: ReplyCoordinator,
     ) -> bool:
         """Merge a planning-phase supplement into a regenerated request."""
+        active = coordinator.active_event_for(event)
+        if not self._should_interrupt_active_reply(event, active):
+            # Provider 已开始调用且非修正词：悬挂，让核心 follow-up 接管；
+            # 清理 planning state，避免下一次消息被误判为规划期补充。
+            if active is not None:
+                merger.clear_state(active)
+            return False
         pending = merger.take_planning(event)
         if pending is None:
             return False
@@ -404,6 +428,34 @@ class LanguageLogicOptimizer(Star):
             active_event_registry.request_agent_stop_all(origin, exclude=event)
         except Exception:
             logger.debug("[消息合并] 请求停止旧 Agent 失败", exc_info=True)
+
+    def _should_interrupt_active_reply(
+        self,
+        event: AstrMessageEvent,
+        active: Any | None,
+    ) -> bool:
+        """Decide whether an in-flight reply must be interrupted.
+
+        Provider not started -> interrupt (cheap merge regeneration);
+        provider already started -> hang unless the message is a correction.
+        """
+        if active is None:
+            return True
+        provider_call_started = False
+        try:
+            provider_call_started = (
+                active.get_extra("provider_request") is not None
+            )
+        except Exception:
+            logger.debug("[消息合并] 读取 provider_request 失败", exc_info=True)
+        try:
+            is_correction = is_correction_follow_up(event.message_str)
+        except Exception:
+            is_correction = False
+        return should_interrupt_running_reply(
+            provider_call_started,
+            is_correction,
+        )
 
     def _get_guard_terms(self) -> list[str]:
         return parse_terms(self._get_config("content_guard_block_terms", ""))

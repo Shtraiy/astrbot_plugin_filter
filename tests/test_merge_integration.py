@@ -472,6 +472,64 @@ def test_text_event_during_planning_still_requests_agent_stop():
     assert len(calls) == 1
 
 
+def test_provider_started_supplement_hangs_without_stop_or_promote():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
+    old.set_extra("provider_request", object())  # provider 已开始
+    follow = FakeEvent("u1", "group:1", "补充", wake=False)
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+
+    asyncio.run(optimizer.on_message(follow))
+
+    assert calls == []
+    assert follow.is_at_or_wake_command is False  # 未提升为唤醒
+    assert old.stopped is False  # 未 supersede
+
+
+def test_provider_started_supplement_hangs_on_waiting_and_clears_planning_state():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
+    old.set_extra("provider_request", object())
+    follow = FakeEvent("u1", "group:1", "补充", wake=False)
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+
+    asyncio.run(optimizer.on_waiting_llm_request(follow))
+
+    assert calls == []
+    assert old.stopped is False
+    assert follow.message_str == "补充"  # 未被合并改写
+    assert optimizer._get_message_merger().planning_active(follow) is False
+
+
+def test_provider_not_started_supplement_still_interrupts_and_regenerates():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning，无 provider_request
+    new = FakeEvent("u1", "group:1", "补充", wake=True)
+
+    asyncio.run(optimizer.on_waiting_llm_request(new))
+
+    assert old.stopped is True  # 被打断
+    assert new.message_str == "第一段\n补充"  # 合并重生成
+
+
+def test_correction_interrupts_even_after_provider_started():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
+    old.set_extra("provider_request", object())
+    new = FakeEvent("u1", "group:1", "再想想", wake=True)
+
+    asyncio.run(optimizer.on_waiting_llm_request(new))
+
+    assert old.stopped is True
+    assert new.message_str == "第一段\n再想想"
+
+
 def test_empty_event_does_not_open_merge_window():
     optimizer = make_optimizer()
     empty = FakeEvent("u1", "group:1", text="", wake=True)

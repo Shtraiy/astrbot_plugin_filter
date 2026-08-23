@@ -11,7 +11,63 @@ the hook decorators live on the Star class in ``main.py``.
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+_MENTION_LEAD_RE = re.compile(r"^\s*(?:@[^\s，。！？!?；;、]+)\s*")
+
+# 修正词：用户对正在生成中的回复表达"推翻/换一个/重来"。
+# 命中时即使 provider 已开始调用也打断并合并重生成。
+CORRECTION_TERMS = (
+    "再想想",
+    "不对",
+    "等一下",
+    "换一个",
+    "重新",
+    "忘了",
+    "不是这个",
+)
+
+# 修正词前的否定前缀：出现则不算修正（"不用再想想了"）。
+_CORRECTION_NEGATIONS = ("不", "别", "没", "不要", "不用")
+
+
+def is_correction_follow_up(text: str | None) -> bool:
+    """Return True when the follow-up text reads like a correction.
+
+    Rules:
+    - leading ``@bot`` mention is stripped;
+    - the text must be short-ish (no long explanations) and contain a
+      correction term;
+    - a negation immediately before the term cancels the match.
+    """
+    if not text:
+        return False
+    cleaned = _MENTION_LEAD_RE.sub("", str(text)).strip()
+    if not cleaned or len(cleaned) > 32:
+        return False
+    for term in CORRECTION_TERMS:
+        idx = cleaned.find(term)
+        if idx < 0:
+            continue
+        prefix = cleaned[:idx].strip()
+        if prefix and any(prefix.endswith(neg) for neg in _CORRECTION_NEGATIONS):
+            continue
+        return True
+    return False
+
+
+def should_interrupt_running_reply(
+    provider_call_started: bool,
+    is_correction: bool,
+) -> bool:
+    """Decide whether an in-flight reply should be interrupted.
+
+    - provider not started yet -> interrupting is cheap, merge and regenerate;
+    - provider already started -> let AstrBot's native follow-up take over,
+      unless the user is explicitly correcting the in-flight reply.
+    """
+    return is_correction or not provider_call_started
 
 
 def is_superseded_event(coordinator: Any, event: Any) -> bool:
@@ -38,4 +94,10 @@ def stop_if_superseded(coordinator: Any, event: Any) -> bool:
     return True
 
 
-__all__ = ["is_superseded_event", "stop_if_superseded"]
+__all__ = [
+    "CORRECTION_TERMS",
+    "is_correction_follow_up",
+    "is_superseded_event",
+    "should_interrupt_running_reply",
+    "stop_if_superseded",
+]

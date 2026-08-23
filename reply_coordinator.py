@@ -68,6 +68,19 @@ class ReplyCoordinator:
         except Exception:
             return False
 
+    def active_event_for(self, event: Any) -> Any | None:
+        """Return the session's other active event, or None when none is active."""
+        if event is None:
+            return None
+        try:
+            session = self._session_key(event)
+        except Exception:
+            return None
+        active = self._active_by_session.get(session)
+        if active is None or active is event:
+            return None
+        return active
+
     def supersede_active_event(self, event: Any) -> bool:
         """Cancel an active event's reply so a merged follow-up can regenerate."""
         if event is None:
