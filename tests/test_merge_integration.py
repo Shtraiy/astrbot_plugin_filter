@@ -312,7 +312,7 @@ def test_same_sender_wakeup_requests_agent_stop_even_without_merge_state():
     optimizer = make_optimizer()
     first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
     asyncio.run(optimizer.on_waiting_llm_request(first))
-    optimizer._get_message_merger().clear_owner(first)  # 模拟状态已被清理
+    optimizer._get_message_merger().clear_state(first)  # 模拟状态已被清理
 
     calls = []
     optimizer._request_agent_stop = lambda event: calls.append(event)
@@ -339,7 +339,7 @@ def test_non_wake_same_sender_message_does_not_stop_agent():
     optimizer = make_optimizer()
     first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
     asyncio.run(optimizer.on_waiting_llm_request(first))
-    optimizer._get_message_merger().clear_owner(first)  # 无规划状态
+    optimizer._get_message_merger().clear_state(first)  # 无规划状态
 
     calls = []
     optimizer._request_agent_stop = lambda event: calls.append(event)

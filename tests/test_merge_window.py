@@ -217,13 +217,13 @@ def test_media_merge_attaches_to_owner():
     assert image in owner.message_obj.message
 
 
-def test_clear_owner_drops_state():
+def test_clear_state_drops_window_state():
     manager = make_manager()
     owner = FakeEvent("u1", "group:1", "第一段", wake=True)
     manager.start_window(owner)
     manager.finalize_window(owner)
 
-    manager.clear_owner(owner)
+    manager.clear_state(owner)
     assert not manager.promote_planning(FakeEvent("u1", "group:1", "补充", wake=False))
 
 

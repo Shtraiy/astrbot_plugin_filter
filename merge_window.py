@@ -82,7 +82,7 @@ class MergeWindowManager:
         return ""
 
     @staticmethod
-    def _event_will_call_llm(event: Any) -> bool:
+    def _is_wake_event(event: Any) -> bool:
         """True when the event itself will proceed to an LLM request."""
         return bool(getattr(event, "is_at_or_wake_command", False))
 
@@ -164,7 +164,7 @@ class MergeWindowManager:
             return False
         if state.owner_event is event or event in state.captured_events:
             return False
-        if self._event_will_call_llm(event):
+        if self._is_wake_event(event):
             return False
         payload = self._extract_merge_payload(event)
         if payload is None:
@@ -228,7 +228,7 @@ class MergeWindowManager:
             return False
         if state.owner_event is event or event in state.captured_events:
             return False
-        if self._event_will_call_llm(event):
+        if self._is_wake_event(event):
             return False
         payload = self._extract_merge_payload(event)
         if payload is None:
@@ -274,7 +274,7 @@ class MergeWindowManager:
             self._states.pop(key, None)
             return None
         self._states.pop(key, None)
-        media = self._owner_media(state.owner_event)
+        media = self._event_media(state.owner_event)
         media.extend(state.pending_media)
         return (
             state.owner_event,
@@ -316,7 +316,7 @@ class MergeWindowManager:
             return
         state.pending_text = str(text or "").strip()
 
-    def clear_owner(self, event: Any) -> None:
+    def clear_state(self, event: Any) -> None:
         """Drop the state once the owner's reply is decorated or sent."""
         key = self.window_key(event)
         if key is None:
@@ -329,7 +329,7 @@ class MergeWindowManager:
     @classmethod
     def has_media(cls, event: Any) -> bool:
         """Return True when the event's message chain carries image/file media."""
-        return bool(cls._owner_media(event))
+        return bool(cls._event_media(event))
 
     def _extract_merge_payload(self, event: Any) -> tuple[str, list[Any]] | None:
         """Return (text, media_components) when the message is mergeable."""
@@ -366,7 +366,7 @@ class MergeWindowManager:
         chain.extend(media)
 
     @classmethod
-    def _owner_media(cls, event: Any) -> list[Any]:
+    def _event_media(cls, event: Any) -> list[Any]:
         return media_components(event)
 
     def _mergeable(self, text: str) -> bool:

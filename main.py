@@ -214,7 +214,7 @@ class LanguageLogicOptimizer(Star):
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
         """Guard + admission + content guard before LLM."""
         if _event_is_stopped(event):
-            self._get_message_merger().clear_owner(event)
+            self._get_message_merger().clear_state(event)
             return
         if not await self._get_reply_coordinator().admit_wakeup(event):
             return
@@ -238,7 +238,7 @@ class LanguageLogicOptimizer(Star):
             await self._send_guard_reply(event, decision.category)
         finally:
             self._get_reply_coordinator().finish_active(event)
-            self._get_message_merger().clear_owner(event)
+            self._get_message_merger().clear_state(event)
 
     @_event_filter.on_llm_request(priority=-1000)
     async def on_llm_request_marking(self, event: AstrMessageEvent, req) -> None:
@@ -316,7 +316,7 @@ class LanguageLogicOptimizer(Star):
             return
         try:
             if self._get_reply_coordinator().discard_superseded_result(event):
-                self._get_message_merger().clear_owner(event)
+                self._get_message_merger().clear_state(event)
                 return
             result = event.get_result()
             chain = getattr(result, "chain", None)
@@ -329,9 +329,9 @@ class LanguageLogicOptimizer(Star):
                     logger.info("[消息合并] 检测到重复回复，丢弃避免复读")
                     if chain is not None:
                         chain[:] = []
-                    self._get_message_merger().clear_owner(event)
+                    self._get_message_merger().clear_state(event)
                     return
-            self._get_message_merger().clear_owner(event)
+            self._get_message_merger().clear_state(event)
             if chain:
                 for comp in chain:
                     if isinstance(comp, Plain) and comp.text:
@@ -347,7 +347,7 @@ class LanguageLogicOptimizer(Star):
             self._get_self_reply_marker().record_sent_reply(event)
         except Exception:
             logger.debug("[自回复标记] 记录发送失败", exc_info=True)
-        self._get_message_merger().clear_owner(event)
+        self._get_message_merger().clear_state(event)
         self._get_reply_coordinator().finish_active(event)
 
     def _get_config(self, key: str, default=None):
