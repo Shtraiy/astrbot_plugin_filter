@@ -3,65 +3,9 @@ from types import SimpleNamespace
 
 from astrbot.api.message_components import Plain
 
-from main import SAFE_REPLY, LanguageLogicOptimizer
+from main import SAFE_REPLY
 
-
-class FakeContext:
-    def __init__(self):
-        self.sent = []
-
-    async def send_message(self, origin, chain):
-        self.sent.append((origin, chain))
-
-
-class FakeEvent:
-    def __init__(self, sender="u1", origin="group:1", text="", *, wake=True):
-        self.sender = sender
-        self.unified_msg_origin = origin
-        self.group_id = "1"
-        self.message_str = text
-        self.is_at_or_wake_command = wake
-        self.stopped = False
-        self._result = None
-
-    def get_sender_id(self):
-        return self.sender
-
-    def stop_event(self):
-        self.stopped = True
-
-    def is_stopped(self):
-        return self.stopped
-
-    def set_result(self, result):
-        self._result = result
-
-    def get_result(self):
-        return self._result
-
-
-def make_optimizer(**config):
-    optimizer = object.__new__(LanguageLogicOptimizer)
-    optimizer.context = FakeContext()
-    optimizer.config = {
-        "enable_message_merge": True,
-        "enable_content_guard": True,
-        "content_guard_mode": "balanced",
-        "content_guard_block_terms": "",
-        "onboarding_guard_minutes": 0.0,
-        "onboarding_guard_messages": 0,
-        "enable_self_reply_mark": True,
-        "self_reply_mark_minutes": 5.0,
-        "strip_recent_self_meme_context": True,
-        "guard_own_media_attribution": True,
-        **config,
-    }
-    optimizer._onboarding_states = {}
-    optimizer._message_merger = None
-    optimizer._reply_coordinator = None
-    optimizer._self_reply_marker = None
-    optimizer._get_merge_window_seconds = lambda: 0.0
-    return optimizer
+from tests.conftest import FakeEvent, make_optimizer
 
 
 def test_input_guard_blocks_risky_prompt_and_sends_safe_reply():

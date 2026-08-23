@@ -17,7 +17,7 @@ from interruption_guard import (
     scrub_interruption_placeholders,
 )
 
-from tests.test_merge_integration import FakeEvent, make_optimizer
+from tests.conftest import FakeEvent, make_optimizer
 
 
 class FakeResp:

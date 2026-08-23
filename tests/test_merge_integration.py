@@ -3,93 +3,9 @@ from types import SimpleNamespace
 
 from astrbot.api.message_components import Image, Plain
 
-from main import MEDIA_ONLY_PROMPT, LanguageLogicOptimizer, _strip_structure_tags
+from main import MEDIA_ONLY_PROMPT, _strip_structure_tags
 
-
-class FakeContext:
-    def __init__(self):
-        self.sent = []
-
-    async def send_message(self, origin, chain):
-        self.sent.append((origin, chain))
-
-
-class FakeEvent:
-    def __init__(
-        self,
-        sender,
-        origin,
-        text="",
-        *,
-        wake=True,
-        request_id=None,
-        chain=None,
-    ):
-        self.sender = sender
-        self.unified_msg_origin = origin
-        self.message_str = text
-        self.request_id = request_id
-        self._wake = wake
-        self.is_at_or_wake_command = wake
-        self.stopped = False
-        self._result = None
-        self._extras = {}
-        self._chain = chain if chain is not None else ([Plain(text)] if text else [])
-        self.message_obj = SimpleNamespace(message=self._chain)
-
-    def get_sender_id(self):
-        return self.sender
-
-    def get_messages(self):
-        return self.message_obj.message
-
-    def is_wake_up(self):
-        return self._wake
-
-    def stop_event(self):
-        self.stopped = True
-
-    def is_stopped(self):
-        return self.stopped
-
-    def set_extra(self, key, value):
-        self._extras[key] = value
-
-    def set_result(self, result):
-        self._result = result
-
-    def get_result(self):
-        return self._result
-
-
-def make_optimizer(**overrides):
-    optimizer = object.__new__(LanguageLogicOptimizer)
-    optimizer.config = {
-        "enable_message_merge": True,
-        "merge_window_seconds": 6.0,
-        "merge_max_messages": 5,
-        "merge_max_chars": 2000,
-        "merge_ignore_prefixes": "/,!",
-        "merge_include_media": True,
-        "merge_task_cancel": False,
-        "enable_self_reply_mark": True,
-        "self_reply_mark_minutes": 5.0,
-        "strip_recent_self_meme_context": True,
-        "guard_own_media_attribution": True,
-        "enable_content_guard": False,
-        "content_guard_mode": "balanced",
-        "content_guard_block_terms": "",
-        "onboarding_guard_minutes": 30.0,
-        "onboarding_guard_messages": 20,
-    }
-    optimizer.config.update(overrides)
-    optimizer.context = FakeContext()
-    optimizer._onboarding_states = {}
-    optimizer._message_merger = None
-    optimizer._reply_coordinator = None
-    optimizer._self_reply_marker = None
-    optimizer._get_merge_window_seconds = lambda: 0.05
-    return optimizer
+from tests.conftest import FakeEvent, make_optimizer
 
 
 def test_two_segments_merge_into_one_wake():

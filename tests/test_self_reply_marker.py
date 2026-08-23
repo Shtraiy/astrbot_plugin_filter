@@ -15,27 +15,7 @@ from _astrbot_plugin_filter_test.self_reply_marker import (
     strip_recent_self_meme_context,
 )
 
-
-class FakeEvent:
-    def __init__(self, sender, origin, text="", *, chain=None):
-        self.sender = sender
-        self.unified_msg_origin = origin
-        self.message_str = text
-        self._chain = chain if chain is not None else ([Plain(text)] if text else [])
-        self.message_obj = SimpleNamespace(message=self._chain)
-        self._result = None
-
-    def get_sender_id(self):
-        return self.sender
-
-    def get_messages(self):
-        return self._chain
-
-    def set_result(self, result):
-        self._result = result
-
-    def get_result(self):
-        return self._result
+from tests.conftest import FakeEvent
 
 
 def make_marker(minutes=5.0, *, now=None, enabled=True):
