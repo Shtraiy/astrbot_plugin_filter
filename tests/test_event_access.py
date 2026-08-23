@@ -10,6 +10,7 @@ from event_access import (
     entry_content,
     entry_role,
     entry_text,
+    event_has_content,
     get_message_chain,
     has_media,
     has_reply,
@@ -155,3 +156,25 @@ def test_entry_text_returns_none_for_multimodal_or_missing():
         is None
     )
     assert entry_text({"type": "text"}) is None
+
+
+def test_event_has_content_true_for_message_str_text():
+    assert event_has_content(SimpleNamespace(message_str="你好", message_obj=None)) is True
+
+
+def test_event_has_content_true_for_chain_text():
+    assert event_has_content(_chain_event([Plain("你好")])) is True
+
+
+def test_event_has_content_true_for_media():
+    assert event_has_content(_chain_event([Image(url="x")])) is True
+
+
+def test_event_has_content_true_for_reply():
+    assert event_has_content(_chain_event([Reply()])) is True
+
+
+def test_event_has_content_false_for_empty_event():
+    assert event_has_content(_chain_event([])) is False
+    assert event_has_content(SimpleNamespace(message_str="", message_obj=None)) is False
+    assert event_has_content(None) is False

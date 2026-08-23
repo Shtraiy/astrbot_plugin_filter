@@ -100,6 +100,26 @@ def plain_text_of(chain: Any) -> str:
     )
 
 
+def event_has_content(event: Any) -> bool:
+    """Return True when the event carries text, media, or a quote.
+
+    Content-less events (empty text, no media, no Reply) must never
+    participate in merging or wake-up handling: treating them as wake-ups
+    can abort an in-flight reply for nothing (e.g. QQ poke/notice events
+    surfaced as empty friend messages).
+    """
+    if str(getattr(event, "message_str", "") or "").strip():
+        return True
+    chain = get_message_chain(event)
+    if not chain:
+        return False
+    if any(is_reply_component(comp) for comp in chain):
+        return True
+    if any(is_media_part(comp) for comp in chain):
+        return True
+    return bool(plain_text_of(chain).strip())
+
+
 def request_contexts(req: Any) -> list[Any] | None:
     """Return the OpenAI-format context list from a request object."""
     if req is None:
@@ -160,6 +180,7 @@ __all__ = [
     "entry_content",
     "entry_role",
     "entry_text",
+    "event_has_content",
     "get_message_chain",
     "has_media",
     "has_reply",

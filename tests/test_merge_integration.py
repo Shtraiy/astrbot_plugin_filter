@@ -444,3 +444,39 @@ def test_marking_hook_skips_stopped_events():
     asyncio.run(optimizer.on_llm_request_marking(event, req))
 
     assert req.extra_user_content_parts == []
+
+
+def test_empty_event_during_planning_does_not_request_agent_stop():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
+    empty = FakeEvent("u1", "group:1", text="", wake=True)
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+
+    asyncio.run(optimizer.on_message(empty))
+
+    assert calls == []
+
+
+def test_text_event_during_planning_still_requests_agent_stop():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
+    follow = FakeEvent("u1", "group:1", "补充", wake=False)
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+
+    asyncio.run(optimizer.on_message(follow))
+
+    assert len(calls) == 1
+
+
+def test_empty_event_does_not_open_merge_window():
+    optimizer = make_optimizer()
+    empty = FakeEvent("u1", "group:1", text="", wake=True)
+
+    asyncio.run(optimizer.on_waiting_llm_request(empty))
+
+    assert optimizer._get_message_merger().planning_active(empty) is False
+    assert empty.stopped is False

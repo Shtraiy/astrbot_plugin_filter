@@ -14,6 +14,7 @@ from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
 from .content_guard import SAFE_REPLY, evaluate_input, parse_terms
+from .event_access import event_has_content
 from .interruption_guard import (
     is_interruption_placeholder_text,
     scrub_interruption_placeholders,
@@ -81,6 +82,8 @@ class LanguageLogicOptimizer(Star):
         """Capture window-phase follow-ups; promote planning-phase supplements."""
         if not self._get_config("enable_message_merge", True):
             return
+        if not event_has_content(event):
+            return
         try:
             merger = self._get_message_merger()
             if merger.is_window_open(event):
@@ -104,6 +107,8 @@ class LanguageLogicOptimizer(Star):
     @_event_filter.on_waiting_llm_request(priority=1000)
     async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
         """Merge same-user segments; supersede old planning when supplemented."""
+        if not event_has_content(event):
+            return
         merger = self._get_message_merger()
         coordinator = self._get_reply_coordinator()
         merge_key = (
