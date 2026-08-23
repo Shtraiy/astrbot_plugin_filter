@@ -288,6 +288,89 @@ def test_plain_wake_followup_still_merges_during_window():
     assert stopped is True
 
 
+def test_window_ignore_prefix_message_not_swallowed():
+    """窗口期：以忽略前缀开头的消息无法合并，必须放行而不是被吞掉。"""
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "FriendMessage:1", "第一段", wake=True)
+    second = FakeEvent("u1", "FriendMessage:1", "/roll", wake=True)
+
+    async def run():
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
+        await asyncio.sleep(0.02)
+        await optimizer.on_message(second)
+        await optimizer.on_waiting_llm_request(second)
+        await first_task
+        return second.stopped, second.message_str
+
+    stopped, text = asyncio.run(run())
+    assert stopped is False
+    assert text == "/roll"
+
+
+def test_window_over_limit_message_not_swallowed():
+    """窗口期：超过合并字数上限的消息无法合并，必须放行而不是被吞掉。"""
+    optimizer = make_optimizer(merge_max_chars=10)
+    first = FakeEvent("u1", "FriendMessage:1", "第一段", wake=True)
+    second = FakeEvent("u1", "FriendMessage:1", "X" * 50, wake=True)
+
+    async def run():
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
+        await asyncio.sleep(0.02)
+        await optimizer.on_message(second)
+        await optimizer.on_waiting_llm_request(second)
+        await first_task
+        return second.stopped, second.message_str
+
+    stopped, text = asyncio.run(run())
+    assert stopped is False
+    assert text == "X" * 50
+
+
+def test_window_unmergeable_component_message_not_swallowed():
+    """窗口期：含不可合并组件（如 At 他人）的消息必须放行而不是被吞掉。"""
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "group:1", "第一段", wake=True)
+    at = SimpleNamespace(type="At", target="u2")
+    second = FakeEvent(
+        "u1",
+        "group:1",
+        text="@u2 你好",
+        chain=[at, Plain("@u2 你好")],
+        wake=False,
+    )
+
+    async def run():
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
+        await asyncio.sleep(0.02)
+        await optimizer.on_message(second)
+        await optimizer.on_waiting_llm_request(second)
+        await first_task
+        return second.stopped, second.message_str
+
+    stopped, text = asyncio.run(run())
+    assert stopped is False
+    assert text == "@u2 你好"
+
+
+def test_window_captured_message_still_consumed():
+    """窗口期：已被 on_message 捕获的普通补充消息仍应被消费，不重复触发。"""
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "FriendMessage:1", "第一段", wake=True)
+    second = FakeEvent("u1", "FriendMessage:1", "补充", wake=False)
+
+    async def run():
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
+        await asyncio.sleep(0.02)
+        await optimizer.on_message(second)
+        await optimizer.on_waiting_llm_request(second)
+        await first_task
+        return first.message_str, second.stopped
+
+    merged, stopped = asyncio.run(run())
+    assert merged == "第一段\n补充"
+    assert stopped is True
+
+
 def test_expired_planning_does_not_promote_later_media_message():
     optimizer = make_optimizer()
     old = FakeEvent("u1", "group:1", "第一段", wake=True)

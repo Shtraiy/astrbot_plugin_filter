@@ -183,6 +183,14 @@ class MergeWindowManager:
         state.last_captured_id = self._event_message_id(event)
         return True
 
+    def is_captured(self, event: Any) -> bool:
+        """True when this event was already merged into the open window."""
+        key = self.window_key(event)
+        if key is None:
+            return False
+        state = self._states.get(key)
+        return state is not None and event in state.captured_events
+
     def merge_wake(self, event: Any) -> bool:
         """Append a same-user wake follow-up while the window is still open."""
         key = self.window_key(event)

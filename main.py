@@ -164,7 +164,9 @@ class LanguageLogicOptimizer(Star):
 
         Returns ``"consumed"`` when the event was merged and stopped,
         ``"cancel_quote"`` when the window was cancelled for a quoted wake-up,
-        or ``"none"`` when no window is open.
+        or ``"none"`` when no window is open or the message cannot be merged
+        (ignore prefix, over-limit, unmergeable components) and must proceed
+        as an independent message instead of being silently dropped.
         """
         if not merger.is_window_open(event):
             return "none"
@@ -177,9 +179,15 @@ class LanguageLogicOptimizer(Star):
             if old is not None:
                 coordinator.supersede_active_event(old)
             return "cancel_quote"
-        merger.merge_wake(event)
-        event.stop_event()
-        return "consumed"
+        if merger.merge_wake(event):
+            event.stop_event()
+            return "consumed"
+        if merger.is_captured(event):
+            # 已被 on_message 的 capture 并入窗口：消费本次事件，避免重复触发。
+            event.stop_event()
+            return "consumed"
+        # 无法合并（忽略前缀 / 超限 / 不可合并组件）：放行，作为独立消息处理。
+        return "none"
 
     async def _handle_planning_phase(
         self,
