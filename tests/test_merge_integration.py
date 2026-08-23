@@ -322,6 +322,42 @@ def test_same_sender_wakeup_requests_agent_stop_even_without_merge_state():
     assert len(calls) == 1
 
 
+def test_interrupt_branch_marks_active_event_agent_stop_requested():
+    """on_message 打断分支必须直接把停止标记写到 active 事件上。
+
+    AstrBot 4.27 的 follow-up capture 检查的是 runner 事件上的
+    ``agent_stop_requested``；仅依赖 ``active_event_registry`` 会在事件未
+    注册进 registry（与 coordinator 状态分离）或标记被重置时漏掉，导致
+    新消息被吞进旧规划而不是合并重生成。
+    """
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "FriendMessage:1", "第一次唤醒", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(first))
+    assert optimizer._get_message_merger().planning_active(first)
+
+    second = FakeEvent("u1", "FriendMessage:1", "第二次唤醒", wake=True)
+    asyncio.run(optimizer.on_message(second))
+
+    assert first.get_extra("agent_stop_requested") is True
+
+
+def test_planning_merge_marks_old_event_agent_stop_requested():
+    """规划期合并时同样给旧事件直接打上停止标记。
+
+    旧事件若仍有活跃 runner，直接标记可让后续消息的 follow-up capture
+    跳过旧规划；同时合并文本本身必须仍然生效。
+    """
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "FriendMessage:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(first))
+
+    second = FakeEvent("u1", "FriendMessage:1", "补充", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(second))
+
+    assert first.get_extra("agent_stop_requested") is True
+    assert second.message_str == "第一段\n补充"
+
+
 def test_other_sender_wakeup_does_not_request_agent_stop():
     optimizer = make_optimizer()
     first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)

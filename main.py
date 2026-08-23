@@ -117,6 +117,7 @@ class LanguageLogicOptimizer(Star):
             # stop the running agent first so AstrBot 4.27's follow-up
             # capture cannot swallow this message into the old planning.
             self._request_agent_stop(event)
+            self._mark_agent_stop_requested(active)
         except Exception:
             logger.debug("[消息合并] 捕获消息失败", exc_info=True)
 
@@ -199,6 +200,7 @@ class LanguageLogicOptimizer(Star):
         old_event, earlier_text, earlier_media = pending
         if old_event is not None:
             self._request_agent_stop(event)
+            self._mark_agent_stop_requested(old_event)
             coordinator.supersede_active_event(old_event)
         event.message_str = merger.join_text(
             earlier_text,
@@ -454,6 +456,24 @@ class LanguageLogicOptimizer(Star):
             active_event_registry.request_agent_stop_all(origin, exclude=event)
         except Exception:
             logger.debug("[消息合并] 请求停止旧 Agent 失败", exc_info=True)
+
+    def _mark_agent_stop_requested(self, event: Any | None) -> None:
+        """Directly mark the active event so AstrBot 4.27's follow-up capture skips it.
+
+        ``active_event_registry.request_agent_stop_all`` and the coordinator's
+        active-event tracking are maintained separately: if the event is not
+        registered in the registry (or the runner resets the flag on abort),
+        the registry call alone can silently miss it, and the new message gets
+        swallowed into the old planning as a follow-up. Setting the flag on the
+        exact event the runner holds is the second line of defense.
+        """
+        setter = getattr(event, "set_extra", None)
+        if not callable(setter):
+            return
+        try:
+            setter("agent_stop_requested", True)
+        except Exception:
+            logger.debug("[消息合并] 直接标记停止请求失败", exc_info=True)
 
     def _should_interrupt_active_reply(
         self,
