@@ -50,7 +50,7 @@ def test_is_correction_follow_up_ignores_negation_and_normal_supplement():
 
 
 def test_should_interrupt_running_reply_truth_table():
-    # provider 未开始 -> 打断；provider 已开始 -> 悬挂；修正词 -> 一律打断
+    # 未产出 LLM 响应 -> 打断；已产出 -> 悬挂；修正词 -> 一律打断
     assert should_interrupt_running_reply(False, False) is True
     assert should_interrupt_running_reply(True, False) is False
     assert should_interrupt_running_reply(True, True) is True

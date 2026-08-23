@@ -58,16 +58,16 @@ def is_correction_follow_up(text: str | None) -> bool:
 
 
 def should_interrupt_running_reply(
-    provider_call_started: bool,
+    reply_output_started: bool,
     is_correction: bool,
 ) -> bool:
     """Decide whether an in-flight reply should be interrupted.
 
-    - provider not started yet -> interrupting is cheap, merge and regenerate;
-    - provider already started -> let AstrBot's native follow-up take over,
+    - no LLM output produced yet -> interrupting is cheap, merge and regenerate;
+    - LLM output already started -> let AstrBot's native follow-up take over,
       unless the user is explicitly correcting the in-flight reply.
     """
-    return is_correction or not provider_call_started
+    return is_correction or not reply_output_started
 
 
 def is_superseded_event(coordinator: Any, event: Any) -> bool:

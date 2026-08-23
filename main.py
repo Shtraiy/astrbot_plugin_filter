@@ -336,6 +336,10 @@ class LanguageLogicOptimizer(Star):
             ):
                 event.stop_event()
                 logger.info("[自回复标记] 已拦截中断占位符响应，阻止写入记忆")
+            if not _event_is_stopped(event):
+                # 标记该事件已产出过 LLM 响应：后续同会话新消息据此
+                # 区分"打断合并"（未产出）与"悬挂"（已产出）。
+                event.set_extra("llm_output_started", True)
         except Exception:
             logger.debug("[消息合并] 响应守卫失败", exc_info=True)
 
@@ -436,24 +440,22 @@ class LanguageLogicOptimizer(Star):
     ) -> bool:
         """Decide whether an in-flight reply must be interrupted.
 
-        Provider not started -> interrupt (cheap merge regeneration);
-        provider already started -> hang unless the message is a correction.
+        No LLM output produced yet -> interrupt (cheap merge regeneration);
+        LLM output already started -> hang unless the message is a correction.
         """
         if active is None:
             return True
-        provider_call_started = False
+        reply_output_started = False
         try:
-            provider_call_started = (
-                active.get_extra("provider_request") is not None
-            )
+            reply_output_started = bool(active.get_extra("llm_output_started"))
         except Exception:
-            logger.debug("[消息合并] 读取 provider_request 失败", exc_info=True)
+            logger.debug("[消息合并] 读取 llm_output_started 失败", exc_info=True)
         try:
             is_correction = is_correction_follow_up(event.message_str)
         except Exception:
             is_correction = False
         return should_interrupt_running_reply(
-            provider_call_started,
+            reply_output_started,
             is_correction,
         )
 
