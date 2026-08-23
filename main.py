@@ -118,8 +118,9 @@ class LanguageLogicOptimizer(Star):
             # capture cannot swallow this message into the old planning.
             self._request_agent_stop(event)
             self._mark_agent_stop_requested(active)
+            self._schedule_stop_remark(active)
         except Exception:
-            logger.debug("[消息合并] 捕获消息失败", exc_info=True)
+            logger.warning("[消息合并] 捕获消息失败", exc_info=True)
 
     @_event_filter.on_waiting_llm_request(priority=1000)
     async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
@@ -473,7 +474,55 @@ class LanguageLogicOptimizer(Star):
         try:
             setter("agent_stop_requested", True)
         except Exception:
-            logger.debug("[消息合并] 直接标记停止请求失败", exc_info=True)
+            logger.warning("[消息合并] 直接标记停止请求失败", exc_info=True)
+
+    def _schedule_stop_remark(self, event: Any | None) -> None:
+        """Periodically re-set ``agent_stop_requested`` for a short window.
+
+        AstrBot master 在 agent 中止时会把该标记重置为 False（
+        ``astr_agent_run_util``），而旧 runner 要稍后才从活跃列表移除；
+        若新消息恰好在这两者之间到达 follow-up capture，仍会被吞。周期重标
+        直到事件停止或窗口结束，抵消这次重置，把竞态窗口封死。
+        """
+        setter = getattr(event, "set_extra", None)
+        if not callable(setter):
+            return
+        try:
+            total = self._get_float_config("merge_stop_remark_seconds", 1.5)
+        except Exception:
+            return
+        total = max(0.0, min(total, 5.0))
+        if total <= 0:
+            return
+        interval = min(0.05, total / 2)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        start = loop.time()
+
+        async def _remark() -> None:
+            try:
+                while asyncio.get_running_loop().time() - start <= total:
+                    try:
+                        if (
+                            getattr(event, "is_stopped", None) is not None
+                            and callable(event.is_stopped)
+                            and event.is_stopped()
+                        ):
+                            return
+                        event.set_extra("agent_stop_requested", True)
+                    except Exception:
+                        logger.warning("[消息合并] 重标停止标记失败", exc_info=True)
+                        return
+                    await asyncio.sleep(interval)
+            except Exception:
+                logger.debug("[消息合并] 重标任务异常退出", exc_info=True)
+
+        try:
+            loop.create_task(_remark())
+        except Exception:
+            logger.warning("[消息合并] 启动重标任务失败", exc_info=True)
 
     def _should_interrupt_active_reply(
         self,

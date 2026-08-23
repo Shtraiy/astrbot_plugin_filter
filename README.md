@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.21-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.22-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -131,6 +131,12 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.22
+
+- **修复**：封死打断竞态的最后窗口——AstrBot 在 agent 中止时会把 `agent_stop_requested` 重置为 False，而旧 runner 稍后才从活跃列表移除，新消息仍可能在两者之间被 follow-up 捕获吞掉。现在打断后会周期性重打该标记（默认 1.5 秒窗口，`merge_stop_remark_seconds` 可调），直到事件停止或窗口结束。
+- **修复**：合并/打断关键路径上的异常日志从 `debug` 提升为 `warning`，生产环境排障不再静默。
+- **测试**：补充群聊规划期打断打标、群聊已输出悬挂不打标、以及"重置后重标"三组用例。
 
 ### v3.0.21
 

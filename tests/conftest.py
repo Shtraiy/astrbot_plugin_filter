@@ -221,6 +221,7 @@ def make_optimizer(**overrides):
         "merge_max_chars": 2000,
         "merge_ignore_prefixes": "/,!",
         "merge_include_media": True,
+        "merge_stop_remark_seconds": 1.5,
         "enable_task_execution_guard": True,
         "enable_self_reply_mark": True,
         "self_reply_mark_minutes": 5.0,

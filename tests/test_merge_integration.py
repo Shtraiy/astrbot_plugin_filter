@@ -358,6 +358,56 @@ def test_planning_merge_marks_old_event_agent_stop_requested():
     assert second.message_str == "第一段\n补充"
 
 
+def test_stop_remark_reattaches_flag_after_astrbot_reset():
+    """AstrBot master 在 agent 中止时会把 agent_stop_requested 重置为 False。
+
+    重标任务必须在重置后重新打上标记，直到捕获窗口结束，否则新消息仍可能
+    在旧 runner 移除前被 follow-up 吞掉。
+    """
+    optimizer = make_optimizer(merge_stop_remark_seconds=0.5)
+
+    async def run():
+        first = FakeEvent("u1", "FriendMessage:1", "第一次唤醒", wake=True)
+        await optimizer.on_waiting_llm_request(first)
+        second = FakeEvent("u1", "FriendMessage:1", "第二次唤醒", wake=True)
+        await optimizer.on_message(second)
+        # 模拟 AstrBot 中止 agent 时对标记的重置。
+        first.set_extra("agent_stop_requested", False)
+        assert first.get_extra("agent_stop_requested") is False
+        await asyncio.sleep(0.15)
+        return first.get_extra("agent_stop_requested")
+
+    assert asyncio.run(run()) is True
+
+
+def test_group_planning_wakeup_marks_active_event_agent_stop_requested():
+    """群聊规划期：唤醒消息打断旧回复时同样直接给 active 事件打标记。"""
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(first))
+
+    second = FakeEvent("u1", "group:1", "第二次唤醒", wake=True)
+    asyncio.run(optimizer.on_message(second))
+
+    assert first.get_extra("agent_stop_requested") is True
+
+
+def test_group_streaming_reply_hang_does_not_mark_agent_stop_requested():
+    """群聊已开始输出：非修正词悬挂，让核心 follow-up 接管，不打标记。"""
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(first))
+    first.set_extra("llm_output_started", True)
+
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+    second = FakeEvent("u1", "group:1", "补充", wake=True)
+    asyncio.run(optimizer.on_message(second))
+
+    assert calls == []
+    assert first.get_extra("agent_stop_requested") is not True
+
+
 def test_other_sender_wakeup_does_not_request_agent_stop():
     optimizer = make_optimizer()
     first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)

@@ -54,6 +54,13 @@
     "default": 60.0,
     "invisible": true
   },
+  "merge_stop_remark_seconds": {
+    "description": "打断后停止标记的重标窗口（秒）",
+    "type": "float",
+    "hint": "AstrBot 在 agent 中止时会把 agent_stop_requested 重置为 False；插件在打断后周期性重打该标记，直到事件停止或本窗口结束，防止新消息被 follow-up 捕获吞掉。设为 0 关闭重标。",
+    "default": 1.5,
+    "invisible": true
+  },
   "enable_self_reply_mark": {
     "description": "启用 bot 自回复归属标记",
     "type": "bool",
