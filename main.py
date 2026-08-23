@@ -452,6 +452,10 @@ class LanguageLogicOptimizer(Star):
         """
         if active is None:
             return True
+        if self._event_is_private_chat(event):
+            # 私聊：每条消息都是对 bot 说的，一律打断旧回复并合并重生成，
+            # 避免 follow-up 排队等旧 agent（如 LLM 超时重试）导致不回复。
+            return True
         reply_output_started = False
         try:
             reply_output_started = bool(active.get_extra("llm_output_started"))
@@ -473,6 +477,15 @@ class LanguageLogicOptimizer(Star):
             reply_output_started,
             is_correction,
         )
+
+    def _event_is_private_chat(self, event: AstrMessageEvent) -> bool:
+        checker = getattr(event, "is_private_chat", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return False
+        return False
 
     def _get_guard_terms(self) -> list[str]:
         return parse_terms(self._get_config("content_guard_block_terms", ""))

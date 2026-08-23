@@ -186,6 +186,9 @@ class FakeEvent:
     def is_wake_up(self):
         return self._wake
 
+    def is_private_chat(self):
+        return "FriendMessage" in str(self.unified_msg_origin)
+
     def stop_event(self):
         self.stopped = True
 

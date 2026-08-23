@@ -576,6 +576,23 @@ def test_wake_supplement_hangs_after_llm_output_started():
     assert old.stopped is False
 
 
+def test_private_supplement_interrupts_even_after_llm_output_started():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "FriendMessage:2419269719", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
+    old.set_extra("llm_output_started", True)
+    follow = FakeEvent("u1", "FriendMessage:2419269719", "补充", wake=True)
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+
+    asyncio.run(optimizer.on_message(follow))
+
+    # 私聊：每条消息都是对 bot 说的，即使旧回复已产出 LLM 响应也一律打断，
+    # 避免 follow-up 排队等旧 agent（如 LLM 超时重试）导致消息石沉大海。
+    assert len(calls) == 1
+    assert old.stopped is False
+
+
 def test_other_sender_message_does_not_clear_planning_state():
     optimizer = make_optimizer()
     old = FakeEvent("u1", "group:1", "第一段", wake=True)
