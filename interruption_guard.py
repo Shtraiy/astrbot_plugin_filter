@@ -18,13 +18,12 @@ The module intentionally imports no AstrBot Star machinery.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
+
+from .event_access import entry_content, entry_text
 
 
 INTERRUPTION_PLACEHOLDERS = frozenset({"Stop output.", "Output stopped."})
-
-_TEXT_TYPES = {"text", "input_text", "plain"}
 
 
 def is_interruption_placeholder_text(text: Any) -> bool:
@@ -58,37 +57,8 @@ def scrub_interruption_placeholders(contexts: Any) -> int:
 
 
 def _entry_is_placeholder(entry: Any) -> bool:
-    if isinstance(entry, Mapping):
-        content = entry.get("content")
-    else:
-        content = getattr(entry, "content", None)
-    text = _entry_text(content)
+    text = entry_text(entry_content(entry))
     return text is not None and is_interruption_placeholder_text(text)
-
-
-def _entry_text(content: Any) -> str | None:
-    """Return text content when an entry is text-only; None for multimodal."""
-    if content is None:
-        return None
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-                continue
-            if not isinstance(part, Mapping):
-                return None
-            part_type = str(part.get("type", "") or "").casefold()
-            if part_type not in _TEXT_TYPES:
-                return None
-            text = part.get("text")
-            if not isinstance(text, str):
-                return None
-            parts.append(text)
-        return "".join(parts)
-    return None
 
 
 __all__ = [

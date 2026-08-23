@@ -17,13 +17,20 @@ from typing import Any, Callable
 
 from astrbot.api.message_components import File, Image, Plain
 
+from .event_access import (
+    entry_content,
+    entry_role,
+    get_message_chain,
+    is_media_part,
+    is_reply_component,
+    request_contexts,
+)
+
 
 MAX_MARK_STATES = 4096
 MAX_MARK_ENTRIES = 8
 _MAX_TEXT_SNIPPET = 200
 
-_MEDIA_TYPE_TOKENS = ("image", "file", "audio", "video", "record")
-_TEXT_TYPES = {"text", "input_text", "plain"}
 _TEXT_ONLY_MEDIA_NOTE = (
     "<media_note>"
     "用户本条消息为纯文字，用户本轮没有发送任何图片。"
@@ -211,37 +218,23 @@ class SelfReplyMarker:
 
 def has_user_media(event: Any) -> bool:
     """Return True when the current user message carries media components."""
-    chain = getattr(getattr(event, "message_obj", None), "message", None)
-    if chain is None:
-        getter = getattr(event, "get_messages", None)
-        if callable(getter):
-            try:
-                chain = getter()
-            except Exception:
-                chain = None
+    chain = get_message_chain(event)
     if not chain:
         return False
-    return any(_is_media_part(comp) for comp in chain)
+    return any(is_media_part(comp) for comp in chain)
 
 
 def has_referenced_image(event: Any) -> bool:
     """Return True when the message quotes a historical message that includes an image."""
-    chain = getattr(getattr(event, "message_obj", None), "message", None)
-    if chain is None:
-        getter = getattr(event, "get_messages", None)
-        if callable(getter):
-            try:
-                chain = getter()
-            except Exception:
-                chain = None
+    chain = get_message_chain(event)
     if not chain:
         return False
     for comp in chain:
-        if not _is_reply_component(comp):
+        if not is_reply_component(comp):
             continue
         reply_chain = getattr(comp, "chain", None)
         if isinstance(reply_chain, list) and any(
-            _is_media_part(item) for item in reply_chain
+            is_media_part(item) for item in reply_chain
         ):
             return True
         message_str = str(getattr(comp, "message_str", "") or "")
@@ -258,14 +251,7 @@ async def attach_quoted_images(req: Any, event: Any) -> int:
     Image components from Reply chains directly as a fallback and is idempotent
     against paths AstrBot already attached.
     """
-    chain = getattr(getattr(event, "message_obj", None), "message", None)
-    if chain is None:
-        getter = getattr(event, "get_messages", None)
-        if callable(getter):
-            try:
-                chain = getter()
-            except Exception:
-                chain = None
+    chain = get_message_chain(event)
     if not chain:
         return 0
     image_urls = getattr(req, "image_urls", None)
@@ -274,7 +260,7 @@ async def attach_quoted_images(req: Any, event: Any) -> int:
     existing = {str(value) for value in image_urls if value}
     attached = 0
     for comp in chain:
-        if not _is_reply_component(comp):
+        if not is_reply_component(comp):
             continue
         reply_chain = getattr(comp, "chain", None)
         if not isinstance(reply_chain, list):
@@ -323,19 +309,19 @@ def mark_context_media_ownership(req: Any) -> int:
     conversation history, so nothing is written back to AstrBot history.
     Returns the number of annotated messages.
     """
-    contexts = _request_contexts(req)
+    contexts = request_contexts(req)
     if not contexts:
         return 0
     marked = 0
     for entry in contexts:
-        role = str(_entry_role(entry) or "").casefold()
+        role = str(entry_role(entry) or "").casefold()
         if role in {"assistant", "bot", "ai"}:
             prefix = "[机器人自己发送]"
         elif role == "user":
             prefix = "[用户发送]"
         else:
             continue
-        content = _entry_content(entry)
+        content = entry_content(entry)
         if isinstance(content, str):
             continue
         if _annotate_media_blocks(content, prefix):
@@ -351,7 +337,7 @@ def _annotate_media_blocks(content: Any, prefix: str) -> bool:
             if _annotate_media_block(item, prefix):
                 changed = True
     elif isinstance(content, Mapping):
-        if _is_media_part(content):
+        if is_media_part(content):
             return _prefix_media_mapping(content, prefix)
         nested = content.get("content")
         if nested is not None:
@@ -362,13 +348,13 @@ def _annotate_media_blocks(content: Any, prefix: str) -> bool:
 
 def _annotate_media_block(item: Any, prefix: str) -> bool:
     if isinstance(item, Mapping):
-        if _is_media_part(item):
+        if is_media_part(item):
             return _prefix_media_mapping(item, prefix)
         nested = item.get("content")
         if isinstance(nested, list):
             return _annotate_media_blocks(nested, prefix)
         return False
-    if _is_media_part(item):
+    if is_media_part(item):
         text = str(getattr(item, "text", "") or "").strip()
         if text.startswith(prefix):
             return False
@@ -392,25 +378,6 @@ def _prefix_media_mapping(item: Mapping, prefix: str) -> bool:
         item["text"] = f"{prefix} {item['type']}"
         return True
     return False
-
-
-def _is_reply_component(comp: Any) -> bool:
-    name = type(comp).__name__.casefold()
-    if "reply" in name:
-        return True
-    return "reply" in str(getattr(comp, "type", "") or "").casefold()
-
-
-def describe_contexts(req: Any) -> str:
-    """Compact structural summary of the request history for diagnostics."""
-    contexts = _request_contexts(req)
-    if not contexts:
-        return "no-contexts"
-    roles: dict[str, int] = {}
-    for entry in contexts:
-        role = str(_entry_role(entry) or "?").casefold() or "?"
-        roles[role] = roles.get(role, 0) + 1
-    return f"entries={len(contexts)} roles={roles}"
 
 
 def strip_recent_self_meme_context(req: Any) -> int:
@@ -454,58 +421,6 @@ def _append_note_part(req: Any, note: str) -> bool:
     return True
 
 
-def _request_contexts(req: Any) -> list[Any] | None:
-    if req is None:
-        return None
-    if isinstance(req, Mapping):
-        for key in ("contexts", "context", "chat_history", "history"):
-            value = req.get(key)
-            if isinstance(value, list):
-                return value
-        return None
-    for attr in ("contexts", "context"):
-        value = getattr(req, attr, None)
-        if isinstance(value, list):
-            return value
-    return None
-
-
-def _is_media_part(part: Any) -> bool:
-    if isinstance(part, str):
-        return False
-    if isinstance(part, Mapping):
-        ptype = str(part.get("type", "") or "").casefold()
-        if ptype in _TEXT_TYPES:
-            return False
-        return any(token in ptype for token in _MEDIA_TYPE_TOKENS)
-    name = type(part).__name__.casefold()
-    if any(token in name for token in _MEDIA_TYPE_TOKENS):
-        return True
-    for attr in ("url", "file", "path", "image", "video"):
-        value = getattr(part, attr, None)
-        if value is not None and str(value).strip():
-            return True
-    text = str(getattr(part, "text", "") or "")
-    return (
-        "[Image" in text
-        or "[File" in text
-        or "Image Attachment" in text
-        or "File Attachment" in text
-    )
-
-
-def _entry_role(entry: Any) -> Any:
-    if isinstance(entry, Mapping):
-        return entry.get("role")
-    return getattr(entry, "role", None)
-
-
-def _entry_content(entry: Any) -> Any:
-    if isinstance(entry, Mapping):
-        return entry.get("content")
-    return getattr(entry, "content", None)
-
-
 def _is_self_meme_part(part: Any) -> bool:
     if isinstance(part, Mapping):
         text = part.get("text", part.get("content", ""))
@@ -542,7 +457,6 @@ __all__ = [
     "append_referenced_image_note",
     "append_user_media_note",
     "attach_quoted_images",
-    "describe_contexts",
     "has_referenced_image",
     "has_user_media",
     "mark_context_media_ownership",

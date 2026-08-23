@@ -16,7 +16,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from astrbot.api.message_components import File, Image, Plain
+from astrbot.api.message_components import Plain
+
+from .event_access import (
+    get_message_chain,
+    is_image_or_file,
+    is_reply_component,
+    media_components,
+)
 
 
 MAX_MERGE_STATES = 4096
@@ -131,17 +138,10 @@ class MergeWindowManager:
     @classmethod
     def message_has_quote(cls, event: Any) -> bool:
         """Return True when the message quotes a historical message (Reply)."""
-        chain = getattr(getattr(event, "message_obj", None), "message", None)
-        if chain is None:
-            getter = getattr(event, "get_messages", None)
-            if callable(getter):
-                try:
-                    chain = getter()
-                except Exception:
-                    chain = None
+        chain = get_message_chain(event)
         if not chain:
             return False
-        return any(cls._is_reply_component(comp) for comp in chain)
+        return any(is_reply_component(comp) for comp in chain)
 
     def cancel_window(self, event: Any) -> Any | None:
         """Cancel the open window for this user and return its owner event."""
@@ -333,41 +333,28 @@ class MergeWindowManager:
 
     def _extract_merge_payload(self, event: Any) -> tuple[str, list[Any]] | None:
         """Return (text, media_components) when the message is mergeable."""
-        getter = getattr(event, "get_messages", None)
-        if callable(getter):
-            try:
-                chain = list(getter())
-            except Exception:
-                chain = []
-            if not chain:
+        chain = get_message_chain(event)
+        if chain is None:
+            text = str(getattr(event, "message_str", "") or "").strip()
+            return (text, []) if text else None
+        text_parts: list[str] = []
+        media: list[Any] = []
+        for comp in chain:
+            if isinstance(comp, Plain):
+                text_parts.append(getattr(comp, "text", "") or "")
+            elif self._is_mergeable_media(comp):
+                media.append(comp)
+            else:
                 return None
-            text_parts: list[str] = []
-            media: list[Any] = []
-            for comp in chain:
-                if isinstance(comp, Plain):
-                    text_parts.append(getattr(comp, "text", "") or "")
-                elif self._is_mergeable_media(comp):
-                    media.append(comp)
-                else:
-                    return None
-            text = "".join(text_parts).strip()
-            if not text and not media:
-                return None
-            return (text, media)
-        text = str(getattr(event, "message_str", "") or "").strip()
-        return (text, []) if text else None
+        text = "".join(text_parts).strip()
+        if not text and not media:
+            return None
+        return (text, media)
 
     def _is_mergeable_media(self, comp: Any) -> bool:
         if not self._get_config("merge_include_media", True):
             return False
-        return isinstance(comp, (Image, File))
-
-    @staticmethod
-    def _is_reply_component(comp: Any) -> bool:
-        name = type(comp).__name__.casefold()
-        if "reply" in name:
-            return True
-        return "reply" in str(getattr(comp, "type", "") or "").casefold()
+        return is_image_or_file(comp)
 
     @staticmethod
     def attach_media(event: Any, media: list[Any]) -> None:
@@ -380,14 +367,7 @@ class MergeWindowManager:
 
     @classmethod
     def _owner_media(cls, event: Any) -> list[Any]:
-        chain = getattr(getattr(event, "message_obj", None), "message", None)
-        if chain is None:
-            return []
-        return [
-            comp
-            for comp in chain
-            if isinstance(comp, (Image, File))
-        ]
+        return media_components(event)
 
     def _mergeable(self, text: str) -> bool:
         raw = self._get_config("merge_ignore_prefixes", "/,!")
