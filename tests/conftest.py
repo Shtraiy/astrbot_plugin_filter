@@ -119,6 +119,7 @@ def _import_plugin_as_package() -> None:
 
     for module_name in (
         "content_guard",
+        "event_access",
         "interruption_guard",
         "merge_guards",
         "merge_window",
