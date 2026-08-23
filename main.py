@@ -15,6 +15,10 @@ from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
 from .content_guard import SAFE_REPLY, evaluate_input, is_group_origin, parse_terms
+from .interruption_guard import (
+    is_interruption_placeholder_text,
+    scrub_interruption_placeholders,
+)
 from .merge_guards import stop_if_superseded
 from .merge_window import MergeWindowManager
 from .reply_coordinator import ReplyCoordinator
@@ -213,6 +217,9 @@ class LanguageLogicOptimizer(Star):
         if req is None:
             return
         try:
+            removed = scrub_interruption_placeholders(getattr(req, "contexts", None))
+            if removed:
+                logger.info("[自回复标记] 已清理中断占位符 %d 条", removed)
             marked = mark_context_media_ownership(req)
             if marked:
                 logger.info("[自回复标记] 已标注 %d 条历史消息的媒体归属", marked)
@@ -257,6 +264,11 @@ class LanguageLogicOptimizer(Star):
         """Stop superseded events before downstream hooks (e.g. livingmemory)."""
         try:
             stop_if_superseded(self._get_reply_coordinator(), event)
+            if not _event_is_stopped(event) and _resp_is_interruption_placeholder(
+                resp
+            ):
+                event.stop_event()
+                logger.info("[自回复标记] 已拦截中断占位符响应，阻止写入记忆")
         except Exception:
             logger.debug("[消息合并] 响应守卫失败", exc_info=True)
 
@@ -453,6 +465,13 @@ def _event_is_stopped(event) -> bool:
         except Exception:
             return False
     return bool(getattr(event, "stopped", False))
+
+
+def _resp_is_interruption_placeholder(resp) -> bool:
+    """True when the LLM response is AstrBot's agent-interruption marker."""
+    if resp is None:
+        return False
+    return is_interruption_placeholder_text(getattr(resp, "completion_text", None))
 
 
 def _strip_structure_tags(text: str) -> str:
