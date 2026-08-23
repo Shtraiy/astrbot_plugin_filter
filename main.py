@@ -6,7 +6,6 @@ import asyncio
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
 
 from astrbot.api import logger
 from astrbot.api.all import MessageChain
@@ -14,13 +13,14 @@ from astrbot.api.event import AstrMessageEvent, filter as _event_filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
-from .content_guard import SAFE_REPLY, evaluate_input, is_group_origin, parse_terms
+from .content_guard import SAFE_REPLY, evaluate_input, parse_terms
 from .interruption_guard import (
     is_interruption_placeholder_text,
     scrub_interruption_placeholders,
 )
 from .merge_guards import stop_if_superseded
 from .merge_window import MergeWindowManager
+from .onboarding_guard import OnboardingGuard
 from .reply_coordinator import ReplyCoordinator
 from .self_reply_marker import (
     SelfReplyMarker,
@@ -34,15 +34,7 @@ from .self_reply_marker import (
     strip_recent_self_meme_context,
 )
 
-
-MAX_ONBOARDING_STATES = 4096
 MEDIA_ONLY_PROMPT = "用户发送了一张图片/文件，请识别内容并回应。"
-
-
-@dataclass
-class _OnboardingState:
-    started_at: float
-    message_count: int = 0
 
 
 class LanguageLogicOptimizer(Star):
@@ -52,7 +44,7 @@ class LanguageLogicOptimizer(Star):
         super().__init__(context)
         self.config = config
         self._pending_tasks: set[asyncio.Task] = set()
-        self._onboarding_states: dict[str, _OnboardingState] = {}
+        self._onboarding_guard: OnboardingGuard | None = None
         self._message_merger: MergeWindowManager | None = None
         self._reply_coordinator: ReplyCoordinator | None = None
         self._self_reply_marker: SelfReplyMarker | None = None
@@ -77,6 +69,13 @@ class LanguageLogicOptimizer(Star):
             marker = SelfReplyMarker(get_config=self._get_config)
             self._self_reply_marker = marker
         return marker
+
+    def _get_onboarding_guard(self) -> OnboardingGuard:
+        guard = getattr(self, "_onboarding_guard", None)
+        if guard is None:
+            guard = OnboardingGuard(get_config=self._get_config)
+            self._onboarding_guard = guard
+        return guard
 
     @_event_filter.event_message_type(_event_filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent) -> None:
@@ -109,48 +108,19 @@ class LanguageLogicOptimizer(Star):
         merger = self._get_message_merger()
         coordinator = self._get_reply_coordinator()
         merge_key = (
-            merger.user_key(event)
+            merger.window_key(event)
             if self._get_config("enable_message_merge", True)
             else None
         )
-        skip_window = False
+        window_result = "none"
 
         if merge_key is not None:
-            if merger.is_window_open(event):
-                if merger.message_has_quote(event):
-                    # A quoted-message wake-up (e.g. "quote my just-sent image
-                    # and @bot") cannot be merged; cancel the pending window so
-                    # the media-only first message does not also fire, and let
-                    # AstrBot handle the quoted image natively.
-                    old = merger.cancel_window(event)
-                    if old is not None:
-                        coordinator.supersede_active_event(old)
-                    skip_window = True
-                else:
-                    merger.merge_wake(event)
-                    event.stop_event()
-                    return
-
-            pending = merger.take_planning(event)
-            if pending is not None:
-                old_event, earlier_text, earlier_media, pipeline_task = pending
-                if old_event is not None:
-                    self._request_agent_stop(event)
-                    coordinator.supersede_active_event(old_event)
-                event.message_str = merger.join_text(
-                    earlier_text,
-                    str(getattr(event, "message_str", "") or ""),
-                )
-                merger.attach_media(event, earlier_media)
-                if not (event.message_str or "").strip() and merger.has_media(event):
-                    event.message_str = MEDIA_ONLY_PROMPT
-                if not await coordinator.admit_wakeup(event):
-                    return
-                merger.rearm_planning(
-                    event,
-                    event.message_str,
-                    pipeline_task=asyncio.current_task(),
-                )
+            window_result = await self._handle_window_phase(
+                event, merger, coordinator
+            )
+            if window_result == "consumed":
+                return
+            if await self._handle_planning_phase(event, merger, coordinator):
                 return
 
         if not await coordinator.admit_wakeup(event):
@@ -158,22 +128,88 @@ class LanguageLogicOptimizer(Star):
         if (
             merge_key is not None
             and not coordinator.is_session_busy(event)
-            and not skip_window
+            and window_result != "cancel_quote"
         ):
-            pipeline_task = asyncio.current_task()
-            if merger.start_window(event, pipeline_task=pipeline_task):
-                try:
-                    await asyncio.sleep(self._get_merge_window_seconds())
-                finally:
-                    merged = merger.finalize_window(event)
-                    if (
-                        not _event_is_stopped(event)
-                        and not (merged or "").strip()
-                        and merger.has_media(event)
-                    ):
-                        merged = MEDIA_ONLY_PROMPT
-                    event.message_str = merged
-                    merger.sync_pending_text(event, merged)
+            await self._open_merge_window(event, merger)
+
+    async def _handle_window_phase(
+        self,
+        event: AstrMessageEvent,
+        merger: MergeWindowManager,
+        coordinator: ReplyCoordinator,
+    ) -> str:
+        """Handle a same-user follow-up while the window is open.
+
+        Returns ``"consumed"`` when the event was merged and stopped,
+        ``"cancel_quote"`` when the window was cancelled for a quoted wake-up,
+        or ``"none"`` when no window is open.
+        """
+        if not merger.is_window_open(event):
+            return "none"
+        if merger.message_has_quote(event):
+            # A quoted-message wake-up (e.g. "quote my just-sent image and
+            # @bot") cannot be merged; cancel the pending window so the
+            # media-only first message does not also fire, and let AstrBot
+            # handle the quoted image natively.
+            old = merger.cancel_window(event)
+            if old is not None:
+                coordinator.supersede_active_event(old)
+            return "cancel_quote"
+        merger.merge_wake(event)
+        event.stop_event()
+        return "consumed"
+
+    async def _handle_planning_phase(
+        self,
+        event: AstrMessageEvent,
+        merger: MergeWindowManager,
+        coordinator: ReplyCoordinator,
+    ) -> bool:
+        """Merge a planning-phase supplement into a regenerated request."""
+        pending = merger.take_planning(event)
+        if pending is None:
+            return False
+        old_event, earlier_text, earlier_media, _pipeline_task = pending
+        if old_event is not None:
+            self._request_agent_stop(event)
+            coordinator.supersede_active_event(old_event)
+        event.message_str = merger.join_text(
+            earlier_text,
+            str(getattr(event, "message_str", "") or ""),
+        )
+        merger.attach_media(event, earlier_media)
+        if not (event.message_str or "").strip() and merger.has_media(event):
+            event.message_str = MEDIA_ONLY_PROMPT
+        if not await coordinator.admit_wakeup(event):
+            return True
+        merger.rearm_planning(
+            event,
+            event.message_str,
+            pipeline_task=asyncio.current_task(),
+        )
+        return True
+
+    async def _open_merge_window(
+        self,
+        event: AstrMessageEvent,
+        merger: MergeWindowManager,
+    ) -> None:
+        """Hold the event for the merge window, then finalize merged text."""
+        pipeline_task = asyncio.current_task()
+        if not merger.start_window(event, pipeline_task=pipeline_task):
+            return
+        try:
+            await asyncio.sleep(self._get_merge_window_seconds())
+        finally:
+            merged = merger.finalize_window(event)
+            if (
+                not _event_is_stopped(event)
+                and not (merged or "").strip()
+                and merger.has_media(event)
+            ):
+                merged = MEDIA_ONLY_PROMPT
+            event.message_str = merged
+            merger.sync_pending_text(event, merged)
 
     @_event_filter.on_llm_request(priority=1000)
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
@@ -190,7 +226,10 @@ class LanguageLogicOptimizer(Star):
         if not input_text:
             return
 
-        strict = self._touch_onboarding_state(event) or self._guard_mode() == "strict"
+        strict = (
+            self._get_onboarding_guard().touch(event)
+            or self._guard_mode() == "strict"
+        )
         decision = evaluate_input(input_text, self._get_guard_terms(), strict=strict)
         if not decision.blocked:
             return
@@ -370,65 +409,6 @@ class LanguageLogicOptimizer(Star):
             self._get_config("content_guard_mode", "balanced") or "balanced"
         ).lower()
         return value if value in {"balanced", "strict"} else "balanced"
-
-    def _is_group_event(self, event: AstrMessageEvent) -> bool:
-        if is_group_origin(getattr(event, "unified_msg_origin", None)):
-            return True
-        return bool(getattr(event, "group_id", None))
-
-    def _touch_onboarding_state(self, event: AstrMessageEvent) -> bool:
-        if not self._is_group_event(event):
-            return False
-        origin = str(getattr(event, "unified_msg_origin", "") or "")
-        if not origin:
-            return False
-        now = asyncio.get_running_loop().time()
-        self._prune_onboarding_states(now)
-        state = self._onboarding_states.get(origin)
-        if state is None:
-            if len(self._onboarding_states) >= MAX_ONBOARDING_STATES:
-                oldest = min(
-                    self._onboarding_states.items(),
-                    key=lambda item: item[1].started_at,
-                )[0]
-                self._onboarding_states.pop(oldest, None)
-            state = _OnboardingState(started_at=now)
-            self._onboarding_states[origin] = state
-        state.message_count += 1
-        return self._onboarding_active(event)
-
-    def _onboarding_duration_seconds(self) -> float:
-        value = self._get_float_config("onboarding_guard_minutes", 30.0)
-        return max(0.0, value * 60) if math.isfinite(value) else 0.0
-
-    def _onboarding_message_limit(self) -> int:
-        value = self._get_float_config("onboarding_guard_messages", 20)
-        return max(0, int(value)) if math.isfinite(value) else 0
-
-    def _prune_onboarding_states(self, now: float) -> None:
-        duration = self._onboarding_duration_seconds()
-        message_limit = self._onboarding_message_limit()
-        for origin, state in list(self._onboarding_states.items()):
-            elapsed_active = duration > 0 and now - state.started_at < duration
-            count_active = message_limit > 0 and state.message_count <= message_limit
-            if not (elapsed_active or count_active):
-                self._onboarding_states.pop(origin, None)
-
-    def _onboarding_active(self, event: AstrMessageEvent) -> bool:
-        if not self._is_group_event(event):
-            return False
-        origin = str(getattr(event, "unified_msg_origin", "") or "")
-        state = self._onboarding_states.get(origin)
-        if state is None:
-            return False
-        duration = self._onboarding_duration_seconds()
-        message_limit = self._onboarding_message_limit()
-        elapsed_active = (
-            duration > 0
-            and asyncio.get_running_loop().time() - state.started_at < duration
-        )
-        count_active = message_limit > 0 and state.message_count <= message_limit
-        return elapsed_active or count_active
 
     async def _send_guard_reply(self, event: AstrMessageEvent, category: str) -> None:
         origin = getattr(event, "unified_msg_origin", None)

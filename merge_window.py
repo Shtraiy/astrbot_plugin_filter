@@ -64,7 +64,7 @@ class MergeWindowManager:
         self._now = now or time.monotonic
 
     @classmethod
-    def user_key(cls, event: Any) -> tuple[str, str] | None:
+    def window_key(cls, event: Any) -> tuple[str, str] | None:
         origin = str(getattr(event, "unified_msg_origin", "") or "")
         sender = cls._sender_id(event)
         if not origin or not sender:
@@ -95,7 +95,7 @@ class MergeWindowManager:
         return earlier + "\n" + cleaned if earlier else cleaned
 
     def start_window(self, event: Any, *, pipeline_task: Any = None) -> bool:
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return False
         existing = self._states.get(key)
@@ -112,7 +112,7 @@ class MergeWindowManager:
         return True
 
     def is_window_open(self, event: Any) -> bool:
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return False
         state = self._states.get(key)
@@ -124,7 +124,7 @@ class MergeWindowManager:
 
     def planning_active(self, event: Any) -> bool:
         """True when this user has a fresh (unexpired) planning state."""
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return False
         state = self._states.get(key)
@@ -145,7 +145,7 @@ class MergeWindowManager:
 
     def cancel_window(self, event: Any) -> Any | None:
         """Cancel the open window for this user and return its owner event."""
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return None
         state = self._states.get(key)
@@ -156,7 +156,7 @@ class MergeWindowManager:
 
     def capture(self, event: Any) -> bool:
         """Append a same-user non-wake follow-up while the window is open."""
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return False
         state = self._states.get(key)
@@ -185,7 +185,7 @@ class MergeWindowManager:
 
     def merge_wake(self, event: Any) -> bool:
         """Append a same-user wake follow-up while the window is still open."""
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return False
         state = self._states.get(key)
@@ -217,7 +217,7 @@ class MergeWindowManager:
         The event text/media stay on the event; ``take_planning`` merges them
         into the regenerated request.
         """
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return False
         state = self._states.get(key)
@@ -248,7 +248,7 @@ class MergeWindowManager:
 
     def finalize_window(self, event: Any) -> str:
         """Close the window, return the merged text, and move to planning."""
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return str(getattr(event, "message_str", "") or "")
         state = self._states.get(key)
@@ -264,7 +264,7 @@ class MergeWindowManager:
 
     def take_planning(self, event: Any) -> tuple[Any, str, list[Any], Any] | None:
         """Consume the planning state; return (old_event, text, media, task)."""
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return None
         state = self._states.get(key)
@@ -291,7 +291,7 @@ class MergeWindowManager:
         pipeline_task: Any = None,
     ) -> bool:
         """Re-create a planning state for a regenerated event."""
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return False
         if len(self._states) >= MAX_MERGE_STATES:
@@ -308,7 +308,7 @@ class MergeWindowManager:
     def sync_pending_text(self, event: Any, text: str) -> None:
         """Sync a post-finalize rewrite (e.g. media-only placeholder) back into
         the planning state so later take_planning merges see the new text."""
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return
         state = self._states.get(key)
@@ -318,7 +318,7 @@ class MergeWindowManager:
 
     def clear_owner(self, event: Any) -> None:
         """Drop the state once the owner's reply is decorated or sent."""
-        key = self.user_key(event)
+        key = self.window_key(event)
         if key is None:
             return
         state = self._states.get(key)

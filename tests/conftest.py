@@ -123,6 +123,7 @@ def _import_plugin_as_package() -> None:
         "interruption_guard",
         "merge_guards",
         "merge_window",
+        "onboarding_guard",
         "reply_coordinator",
         "self_reply_marker",
         "main",
