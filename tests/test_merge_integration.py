@@ -593,6 +593,40 @@ def test_private_supplement_interrupts_even_after_llm_output_started():
     assert old.stopped is False
 
 
+def test_planning_supplement_records_last_message_id():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    new = FakeEvent("u1", "group:1", "补充", wake=True)
+
+    asyncio.run(optimizer.on_waiting_llm_request(old))
+    asyncio.run(optimizer.on_waiting_llm_request(new))
+
+    assert new.get_extra("merge_last_message_id") == new.message_obj.message_id
+
+
+def test_on_decorating_result_retargets_quote_to_last_merged_message():
+    optimizer = make_optimizer()
+    first = FakeEvent("u1", "group:1", "第一段", wake=True)
+    second = FakeEvent("u1", "group:1", "补充", wake=False)
+    first.set_extra("merge_last_message_id", second.message_obj.message_id)
+    first.set_result(SimpleNamespace(chain=[Plain("回复")]))
+
+    asyncio.run(optimizer.on_decorating_result(first))
+
+    assert first.message_obj.message_id == second.message_obj.message_id
+
+
+def test_on_decorating_result_keeps_own_quote_without_merge():
+    optimizer = make_optimizer()
+    event = FakeEvent("u1", "group:1", "普通消息", wake=True)
+    event.set_result(SimpleNamespace(chain=[Plain("回复")]))
+    original = event.message_obj.message_id
+
+    asyncio.run(optimizer.on_decorating_result(event))
+
+    assert event.message_obj.message_id == original
+
+
 def test_other_sender_message_does_not_clear_planning_state():
     optimizer = make_optimizer()
     old = FakeEvent("u1", "group:1", "第一段", wake=True)

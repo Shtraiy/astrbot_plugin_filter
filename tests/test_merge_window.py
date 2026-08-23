@@ -13,8 +13,13 @@ class FakeEvent:
         self._wake = wake
         self.is_at_or_wake_command = wake
         self._chain = chain if chain is not None else ([Plain(text)] if text else [])
-        self.message_obj = SimpleNamespace(message=self._chain)
+        self.message_id = f"mid-{id(self)}"
+        self.message_obj = SimpleNamespace(
+            message=self._chain,
+            message_id=self.message_id,
+        )
         self.stopped = False
+        self._extras = {}
 
     def get_sender_id(self):
         return self.sender
@@ -27,6 +32,12 @@ class FakeEvent:
 
     def stop_event(self):
         self.stopped = True
+
+    def set_extra(self, key, value):
+        self._extras[key] = value
+
+    def get_extra(self, key, default=None):
+        return self._extras.get(key, default)
 
 
 def make_manager(**config):
@@ -193,6 +204,20 @@ def test_clear_state_drops_window_state():
 
     manager.clear_state(owner)
     assert manager.planning_active(owner) is False
+
+
+def test_finalize_records_last_captured_message_id():
+    manager = make_manager()
+    first = FakeEvent("u1", "group:1", "第一段", wake=True)
+    second = FakeEvent("u1", "group:1", "补充", wake=False)
+    third = FakeEvent("u1", "group:1", "再补充", wake=False)
+    manager.start_window(first)
+    manager.capture(second)
+    manager.capture(third)
+
+    manager.finalize_window(first)
+
+    assert first.get_extra("merge_last_message_id") == third.message_id
 
 
 def test_join_text_strips_leading_mention():

@@ -209,6 +209,12 @@ class LanguageLogicOptimizer(Star):
             event.message_str = MEDIA_ONLY_PROMPT
         if not await coordinator.admit_wakeup(event):
             return True
+        try:
+            last_id = getattr(getattr(event, "message_obj", None), "message_id", None)
+            if last_id is not None:
+                event.set_extra("merge_last_message_id", last_id)
+        except Exception:
+            logger.debug("[消息合并] 记录最后消息引用失败", exc_info=True)
         merger.rearm_planning(event, event.message_str)
         return True
 
@@ -372,6 +378,15 @@ class LanguageLogicOptimizer(Star):
                     self._get_message_merger().clear_state(event)
                     return
             self._get_message_merger().clear_state(event)
+            # 合并窗口：让 AstrBot 的引用回复指向最后一条用户消息，
+            # 而不是第一条唤醒消息。
+            try:
+                last_id = event.get_extra("merge_last_message_id")
+                message_obj = getattr(event, "message_obj", None)
+                if last_id is not None and message_obj is not None:
+                    message_obj.message_id = last_id
+            except Exception:
+                logger.debug("[消息合并] 重定向引用失败", exc_info=True)
             if chain:
                 for comp in chain:
                     if isinstance(comp, Plain) and comp.text:

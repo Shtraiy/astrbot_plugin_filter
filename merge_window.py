@@ -38,6 +38,7 @@ class _MergeState:
     pending_media: list[Any] = field(default_factory=list)
     captured_events: set[Any] = field(default_factory=set)
     captured_count: int = 0
+    last_captured_id: Any = None
     planning_started_at: float = 0.0
 
 
@@ -179,6 +180,7 @@ class MergeWindowManager:
         state.pending_media.extend(media)
         state.captured_events.add(event)
         state.captured_count += 1
+        state.last_captured_id = self._event_message_id(event)
         return True
 
     def merge_wake(self, event: Any) -> bool:
@@ -206,6 +208,7 @@ class MergeWindowManager:
         state.pending_media.extend(media)
         state.captured_events.add(event)
         state.captured_count += 1
+        state.last_captured_id = self._event_message_id(event)
         return True
 
     def finalize_window(self, event: Any) -> str:
@@ -222,6 +225,7 @@ class MergeWindowManager:
         state.phase = "planning"
         state.planning_started_at = self._now()
         state.captured_events.clear()
+        self._record_last_message_id(event, state.last_captured_id)
         return merged
 
     def take_planning(self, event: Any) -> tuple[Any, str, list[Any], Any] | None:
@@ -279,6 +283,22 @@ class MergeWindowManager:
         if state is None or state.owner_event is not event:
             return
         self._states.pop(key, None)
+
+    @staticmethod
+    def _event_message_id(event: Any) -> Any:
+        return getattr(getattr(event, "message_obj", None), "message_id", None)
+
+    @classmethod
+    def _record_last_message_id(cls, event: Any, message_id: Any) -> None:
+        """Remember the last merged message id so the quote targets it."""
+        if message_id is None:
+            return
+        setter = getattr(event, "set_extra", None)
+        if callable(setter):
+            try:
+                setter("merge_last_message_id", message_id)
+            except Exception:
+                pass
 
     @classmethod
     def has_media(cls, event: Any) -> bool:

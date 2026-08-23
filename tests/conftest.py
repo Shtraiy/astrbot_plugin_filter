@@ -175,7 +175,11 @@ class FakeEvent:
         self._result = None
         self._extras = {}
         self._chain = chain if chain is not None else ([Plain(text)] if text else [])
-        self.message_obj = SimpleNamespace(message=self._chain)
+        self.message_id = f"mid-{id(self)}"
+        self.message_obj = SimpleNamespace(
+            message=self._chain,
+            message_id=self.message_id,
+        )
 
     def get_sender_id(self):
         return self.sender
