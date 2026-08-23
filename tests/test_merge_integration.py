@@ -480,3 +480,63 @@ def test_empty_event_does_not_open_merge_window():
 
     assert optimizer._get_message_merger().planning_active(empty) is False
     assert empty.stopped is False
+
+
+def test_image_and_two_texts_within_window_merge_into_one_request():
+    optimizer = make_optimizer()
+    optimizer._get_merge_window_seconds = lambda: 0.2
+    first = FakeEvent(
+        "u1",
+        "group:1",
+        text="",
+        chain=[Image("file:///a.png")],
+        wake=True,
+    )
+    second = FakeEvent("u1", "group:1", "第一句", wake=False)
+    third = FakeEvent("u1", "group:1", "第二句", wake=False)
+
+    async def run():
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
+        await asyncio.sleep(0.05)
+        await optimizer.on_waiting_llm_request(second)
+        await optimizer.on_waiting_llm_request(third)
+        await first_task
+        return (
+            first.message_str,
+            first.get_messages(),
+            second.stopped,
+            third.stopped,
+        )
+
+    merged, chain, second_stopped, third_stopped = asyncio.run(run())
+
+    assert merged == "第一句\n第二句"
+    assert any(isinstance(comp, Image) for comp in chain)
+    assert second_stopped is True
+    assert third_stopped is True
+
+
+def test_planning_supplements_keep_accumulating_text_and_image():
+    optimizer = make_optimizer()
+    first = FakeEvent(
+        "u1",
+        "group:1",
+        text="",
+        chain=[Image("file:///a.png")],
+        wake=True,
+    )
+    second = FakeEvent("u1", "group:1", "第一句", wake=True)
+    third = FakeEvent("u1", "group:1", "第二句", wake=True)
+
+    async def run():
+        await optimizer.on_waiting_llm_request(first)  # window -> planning
+        await optimizer.on_waiting_llm_request(second)  # merge + regenerate
+        await optimizer.on_waiting_llm_request(third)  # merge + regenerate
+        return third.message_str, third.get_messages(), first.stopped, second.stopped
+
+    merged, chain, first_stopped, second_stopped = asyncio.run(run())
+
+    assert merged == f"{MEDIA_ONLY_PROMPT}\n第一句\n第二句"
+    assert any(isinstance(comp, Image) for comp in chain)
+    assert first_stopped is True
+    assert second_stopped is True
