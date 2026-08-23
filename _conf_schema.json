@@ -40,13 +40,6 @@
     "default": true,
     "invisible": true
   },
-  "merge_task_cancel": {
-    "description": "合并时取消旧规划（兼容项）",
-    "type": "bool",
-    "hint": "历史兼容项：AstrBot 4.25+ 已通过 active_event_registry 自动停止旧 Agent，无需额外开启；旧版本保持关闭。",
-    "default": false,
-    "invisible": true
-  },
   "merge_planning_ttl": {
     "description": "规划期状态保留时长（秒）",
     "type": "float",

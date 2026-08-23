@@ -197,7 +197,7 @@ class LanguageLogicOptimizer(Star):
         pending = merger.take_planning(event)
         if pending is None:
             return False
-        old_event, earlier_text, earlier_media, _pipeline_task = pending
+        old_event, earlier_text, earlier_media = pending
         if old_event is not None:
             self._request_agent_stop(event)
             coordinator.supersede_active_event(old_event)
@@ -210,11 +210,7 @@ class LanguageLogicOptimizer(Star):
             event.message_str = MEDIA_ONLY_PROMPT
         if not await coordinator.admit_wakeup(event):
             return True
-        merger.rearm_planning(
-            event,
-            event.message_str,
-            pipeline_task=asyncio.current_task(),
-        )
+        merger.rearm_planning(event, event.message_str)
         return True
 
     async def _open_merge_window(
@@ -223,8 +219,7 @@ class LanguageLogicOptimizer(Star):
         merger: MergeWindowManager,
     ) -> None:
         """Hold the event for the merge window, then finalize merged text."""
-        pipeline_task = asyncio.current_task()
-        if not merger.start_window(event, pipeline_task=pipeline_task):
+        if not merger.start_window(event):
             return
         try:
             await asyncio.sleep(self._get_merge_window_seconds())
@@ -450,6 +445,14 @@ class LanguageLogicOptimizer(Star):
             reply_output_started = bool(active.get_extra("llm_output_started"))
         except Exception:
             logger.debug("[消息合并] 读取 llm_output_started 失败", exc_info=True)
+        if not reply_output_started:
+            # AstrBot 流式响应在 agent 启动时就 set_result(STREAMING_RESULT)，
+            # 而 llm_output_started 要到本轮 LLM 调用完成才写入。只要结果已
+            # 挂上事件，就认为输出已开始，不应打断。
+            try:
+                reply_output_started = active.get_result() is not None
+            except Exception:
+                logger.debug("[消息合并] 读取活跃事件结果失败", exc_info=True)
         try:
             is_correction = is_correction_follow_up(event.message_str)
         except Exception:

@@ -104,6 +104,15 @@ def test_active_event_for_three_states():
     assert coordinator.active_event_for(other_session) is None
 
 
+def test_active_event_for_ignores_other_sender():
+    coordinator = make_coordinator()
+    a = FakeEvent("u1", "group:1")
+    asyncio.run(coordinator.admit_wakeup(a))
+    other = FakeEvent("u2", "group:1")
+
+    assert coordinator.active_event_for(other) is None
+
+
 def test_active_same_sender_distinguishes_users():
     coordinator = make_coordinator()
     a = FakeEvent("u1", "group:1")

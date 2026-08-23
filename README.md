@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.15-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.16-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -131,6 +131,12 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.16
+
+- **修复**：群聊并发——其他用户的消息不再命中当前用户的活跃回复，`active_event_for` 现在按发送者隔离，避免误清他人规划状态。
+- **修复**：流式输出期间的打断边界——活跃事件已挂上流式结果（`get_result()` 非空）即视为"已开始输出"，不再误打断半截回复；此前仅依赖 `llm_output_started`，流式 chunk 阶段标记尚未写入。
+- **清理**：移除从未生效的死配置 `merge_task_cancel` 与 `pipeline_task` 传递链（`_conf_schema.json` / `merge_window.py` / `main.py` / 测试）。
 
 ### v3.0.15
 

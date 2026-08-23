@@ -69,15 +69,25 @@ class ReplyCoordinator:
             return False
 
     def active_event_for(self, event: Any) -> Any | None:
-        """Return the session's other active event, or None when none is active."""
+        """Return the same sender's other active event, or None when none.
+
+        Merge/supersede decisions are per-sender: another user's message in
+        the same group must never touch this user's in-flight reply.
+        """
         if event is None:
             return None
         try:
             session = self._session_key(event)
+            sender = str(event.get_sender_id())
         except Exception:
             return None
         active = self._active_by_session.get(session)
         if active is None or active is event:
+            return None
+        try:
+            if str(active.get_sender_id()) != sender:
+                return None
+        except Exception:
             return None
         return active
 

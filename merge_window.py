@@ -38,7 +38,6 @@ class _MergeState:
     pending_media: list[Any] = field(default_factory=list)
     captured_events: set[Any] = field(default_factory=set)
     captured_count: int = 0
-    pipeline_task: Any = None
     planning_started_at: float = 0.0
 
 
@@ -94,7 +93,7 @@ class MergeWindowManager:
             return earlier
         return earlier + "\n" + cleaned if earlier else cleaned
 
-    def start_window(self, event: Any, *, pipeline_task: Any = None) -> bool:
+    def start_window(self, event: Any) -> bool:
         key = self.window_key(event)
         if key is None:
             return False
@@ -107,7 +106,6 @@ class MergeWindowManager:
             owner_event=event,
             phase="window",
             pending_text=str(getattr(event, "message_str", "") or "").strip(),
-            pipeline_task=pipeline_task,
         )
         return True
 
@@ -276,19 +274,12 @@ class MergeWindowManager:
         self._states.pop(key, None)
         media = self._event_media(state.owner_event)
         media.extend(state.pending_media)
-        return (
-            state.owner_event,
-            state.pending_text,
-            media,
-            state.pipeline_task,
-        )
+        return (state.owner_event, state.pending_text, media)
 
     def rearm_planning(
         self,
         event: Any,
         merged_text: str,
-        *,
-        pipeline_task: Any = None,
     ) -> bool:
         """Re-create a planning state for a regenerated event."""
         key = self.window_key(event)
@@ -300,7 +291,6 @@ class MergeWindowManager:
             owner_event=event,
             phase="planning",
             pending_text=str(merged_text or "").strip(),
-            pipeline_task=pipeline_task,
             planning_started_at=self._now(),
         )
         return True

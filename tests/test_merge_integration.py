@@ -543,6 +543,39 @@ def test_llm_response_guard_marks_output_started():
     assert event.get_extra("llm_output_started") is True
 
 
+def test_streaming_started_supplement_hangs_without_stop_or_promote():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
+    # AstrBot 流式响应在 agent 启动时就 set_result(STREAMING_RESULT)，
+    # 但本轮 LLM 调用尚未完成，llm_output_started 标记还没写入。
+    old.set_result(SimpleNamespace(result_content_type="streaming"))
+    follow = FakeEvent("u1", "group:1", "补充", wake=False)
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+
+    asyncio.run(optimizer.on_message(follow))
+
+    assert calls == []
+    assert follow.is_at_or_wake_command is False
+    assert old.stopped is False
+
+
+def test_other_sender_message_does_not_clear_planning_state():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
+    old.set_extra("llm_output_started", True)
+    other = FakeEvent("u2", "group:1", "别人说话", wake=True)
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+
+    asyncio.run(optimizer.on_waiting_llm_request(other))
+
+    assert calls == []
+    assert optimizer._get_message_merger().planning_active(old) is True
+
+
 def test_empty_event_does_not_open_merge_window():
     optimizer = make_optimizer()
     empty = FakeEvent("u1", "group:1", text="", wake=True)

@@ -179,17 +179,16 @@ def test_take_planning_returns_accumulated_text_and_rearm_supports_recursion():
     manager.finalize_window(owner)
     follow = FakeEvent("u1", "group:1", "补充", wake=False)
 
-    old, text, media, task = manager.take_planning(follow)
+    old, text, media = manager.take_planning(follow)
     assert old is owner
     assert text == "第一段"
     assert media == []
-    assert task is None
 
     merged = manager.join_text(text, follow.message_str)
     assert merged == "第一段\n补充"
     assert manager.rearm_planning(follow, merged)
 
-    old2, text2, _, _ = manager.take_planning(follow)
+    old2, text2, _ = manager.take_planning(follow)
     assert old2 is follow
     assert text2 == "第一段\n补充"
 
