@@ -141,37 +141,6 @@ def test_merge_wake_appends_wake_followup_during_window():
     assert manager.finalize_window(owner) == "第一段\n第二段"
 
 
-def test_promote_planning_enables_group_followup():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
-    manager.start_window(owner)
-    manager.finalize_window(owner)
-    follow = FakeEvent("u1", "group:1", "补充", wake=False)
-
-    assert manager.promote_planning(follow)
-    assert follow.is_at_or_wake_command is True
-
-
-def test_promote_planning_rejects_wake_and_other_users():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
-    manager.start_window(owner)
-    manager.finalize_window(owner)
-    wake_follow = FakeEvent("u1", "group:1", "@bot 补充", wake=True)
-    wake_follow.is_at_or_wake_command = True
-
-    assert not manager.promote_planning(wake_follow)
-    assert not manager.promote_planning(FakeEvent("u2", "group:1", "别人的", wake=False))
-
-
-def test_promote_planning_requires_planning_phase():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
-    manager.start_window(owner)
-
-    assert not manager.promote_planning(FakeEvent("u1", "group:1", "窗口期", wake=False))
-
-
 def test_take_planning_returns_accumulated_text_and_rearm_supports_recursion():
     manager = make_manager()
     owner = FakeEvent("u1", "group:1", "第一段", wake=True)
@@ -223,7 +192,7 @@ def test_clear_state_drops_window_state():
     manager.finalize_window(owner)
 
     manager.clear_state(owner)
-    assert not manager.promote_planning(FakeEvent("u1", "group:1", "补充", wake=False))
+    assert manager.planning_active(owner) is False
 
 
 def test_join_text_strips_leading_mention():
@@ -299,7 +268,6 @@ def test_planning_state_expires_after_ttl():
     clock["t"] += 61
 
     assert manager.planning_active(follow) is False
-    assert manager.promote_planning(follow) is False
     assert manager.take_planning(follow) is None
 
 

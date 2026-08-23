@@ -60,7 +60,7 @@ def test_planning_supplement_supersedes_and_regenerates():
     assert stopped is True
 
 
-def test_group_non_wake_supplement_promoted_during_planning():
+def test_group_non_wake_supplement_not_promoted_during_planning():
     optimizer = make_optimizer()
     old = FakeEvent("u1", "group:1", "第一段", wake=True)
     follow = FakeEvent("u1", "group:1", "补充", wake=False)
@@ -70,7 +70,7 @@ def test_group_non_wake_supplement_promoted_during_planning():
         await optimizer.on_message(follow)
         return follow.is_at_or_wake_command
 
-    assert asyncio.run(run()) is True
+    assert asyncio.run(run()) is False
 
 
 def test_content_guard_blocks_merged_text():
@@ -459,7 +459,7 @@ def test_empty_event_during_planning_does_not_request_agent_stop():
     assert calls == []
 
 
-def test_text_event_during_planning_still_requests_agent_stop():
+def test_non_wake_text_event_during_planning_does_not_request_agent_stop():
     optimizer = make_optimizer()
     old = FakeEvent("u1", "group:1", "第一段", wake=True)
     asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
@@ -469,7 +469,7 @@ def test_text_event_during_planning_still_requests_agent_stop():
 
     asyncio.run(optimizer.on_message(follow))
 
-    assert len(calls) == 1
+    assert calls == []
 
 
 def test_llm_output_started_supplement_hangs_without_stop_or_promote():
@@ -558,6 +558,21 @@ def test_streaming_started_supplement_hangs_without_stop_or_promote():
 
     assert calls == []
     assert follow.is_at_or_wake_command is False
+    assert old.stopped is False
+
+
+def test_wake_supplement_hangs_after_llm_output_started():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
+    old.set_extra("llm_output_started", True)
+    follow = FakeEvent("u1", "group:1", "@bot 补充", wake=True)
+    calls = []
+    optimizer._request_agent_stop = lambda event: calls.append(event)
+
+    asyncio.run(optimizer.on_message(follow))
+
+    assert calls == []
     assert old.stopped is False
 
 

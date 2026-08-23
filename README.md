@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.17-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.18-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -131,6 +131,11 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.18
+
+- **修复**：遵循 AstrBot 唤醒机制——规划期不再强行把未唤醒消息提升为唤醒并合并重生成。群聊中只有 @bot / 唤醒词 / 引用 bot 的消息才会打断旧规划并合并；发给别人的消息（At 他人、随手发图等）不再导致 bot 主动回复。私聊保持 AstrBot 默认行为（全部消息都算唤醒）。
+- **清理**：删除 `promote_planning` 提升逻辑及对应测试。
 
 ### v3.0.17
 

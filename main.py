@@ -85,7 +85,13 @@ class LanguageLogicOptimizer(Star):
 
     @_event_filter.event_message_type(_event_filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent) -> None:
-        """Capture window-phase follow-ups; promote planning-phase supplements."""
+        """Capture window-phase follow-ups; interrupt only AstrBot wake-ups.
+
+        Wake-up follows AstrBot's own judgement (``is_at_or_wake_command``):
+        private chat wakes on everything, group chat only on @bot / wake
+        prefix / quoting the bot. Non-wake group messages never interrupt an
+        in-flight reply nor force a merge regeneration.
+        """
         if not self._get_config("enable_message_merge", True):
             return
         if not event_has_content(event):
@@ -96,29 +102,21 @@ class LanguageLogicOptimizer(Star):
             if merger.is_window_open(event):
                 merger.capture(event)
                 return
-            if self._event_is_wake_up(event):
-                if coordinator.active_same_sender(event):
-                    # Same user woke again while their reply is still active:
-                    # stop the running agent first so AstrBot 4.27's follow-up
-                    # capture cannot swallow this message into the old planning.
-                    active = coordinator.active_event_for(event)
-                    if not self._should_interrupt_active_reply(event, active):
-                        # Provider 已开始调用：悬挂，让核心 follow-up 接管。
-                        if active is not None:
-                            merger.clear_state(active)
-                        return
-                    self._request_agent_stop(event)
-            if merger.planning_active(event):
-                # AstrBot 4.25+: stop the running agent before follow-up
-                # capture or our own hooks can race with the old planning.
-                active = coordinator.active_event_for(event)
-                if not self._should_interrupt_active_reply(event, active):
-                    if active is not None:
-                        merger.clear_state(active)
-                    return
-                self._request_agent_stop(event)
-            if merger.promote_planning(event):
-                logger.info("[消息合并] 规划期补充消息已提升为唤醒，将合并重生成")
+            if not self._event_is_wake_up(event):
+                # 遵循 AstrBot 唤醒机制：群聊未唤醒的消息不打断旧规划、
+                # 不提升为唤醒、不参与合并重生成。
+                return
+            active = coordinator.active_event_for(event)
+            if active is None:
+                return
+            if not self._should_interrupt_active_reply(event, active):
+                # 活跃回复已开始输出且非修正词：悬挂，让核心 follow-up 接管。
+                merger.clear_state(active)
+                return
+            # Same user woke again while their reply is still active:
+            # stop the running agent first so AstrBot 4.27's follow-up
+            # capture cannot swallow this message into the old planning.
+            self._request_agent_stop(event)
         except Exception:
             logger.debug("[消息合并] 捕获消息失败", exc_info=True)
 

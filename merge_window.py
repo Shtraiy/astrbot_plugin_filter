@@ -208,42 +208,6 @@ class MergeWindowManager:
         state.captured_count += 1
         return True
 
-    def promote_planning(self, event: Any) -> bool:
-        """Let a same-user non-wake supplement proceed to the LLM pipeline.
-
-        Called from ``on_message`` while the owner reply is being generated.
-        The event text/media stay on the event; ``take_planning`` merges them
-        into the regenerated request.
-        """
-        key = self.window_key(event)
-        if key is None:
-            return False
-        state = self._states.get(key)
-        if state is None or state.phase != "planning":
-            return False
-        if self._planning_expired(state):
-            self._states.pop(key, None)
-            return False
-        if state.owner_event is event or event in state.captured_events:
-            return False
-        if self._is_wake_event(event):
-            return False
-        payload = self._extract_merge_payload(event)
-        if payload is None:
-            return False
-        text, media = payload
-        if text and not self._mergeable(text):
-            return False
-        if not text and not media:
-            return False
-        if not self._within_limits(state, text, media):
-            return False
-        try:
-            event.is_at_or_wake_command = True
-        except Exception:
-            return False
-        return True
-
     def finalize_window(self, event: Any) -> str:
         """Close the window, return the merged text, and move to planning."""
         key = self.window_key(event)
