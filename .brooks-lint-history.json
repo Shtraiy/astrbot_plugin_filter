@@ -1,0 +1,13 @@
+[
+  {
+    "date": "2026-08-23",
+    "mode": "Tech Debt Assessment",
+    "score": 60,
+    "findings": {
+      "critical": 1,
+      "warning": 4,
+      "suggestion": 5
+    },
+    "scope": "entire project"
+  }
+]
