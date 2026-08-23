@@ -39,6 +39,7 @@ from .self_reply_marker import (
     mark_context_media_ownership,
     strip_recent_self_meme_context,
 )
+from .task_commitment_guard import inject_task_execution_instruction
 
 MEDIA_ONLY_PROMPT = "用户发送了一张图片/文件，请识别内容并回应。"
 
@@ -263,6 +264,19 @@ class LanguageLogicOptimizer(Star):
         finally:
             self._get_reply_coordinator().finish_active(event)
             self._get_message_merger().clear_state(event)
+
+    @_event_filter.on_llm_request(priority=500)
+    async def on_llm_request_task_guard(self, event: AstrMessageEvent, req) -> None:
+        """Inject the task-execution instruction before the LLM call."""
+        if not self._get_config("enable_task_execution_guard", True):
+            return
+        if _event_is_stopped(event) or req is None:
+            return
+        try:
+            if inject_task_execution_instruction(req):
+                logger.info("[任务执行] 已注入任务执行指令")
+        except Exception:
+            logger.debug("[任务执行] 注入任务执行指令失败", exc_info=True)
 
     @_event_filter.on_llm_request(priority=-1000)
     async def on_llm_request_marking(self, event: AstrMessageEvent, req) -> None:

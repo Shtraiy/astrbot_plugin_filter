@@ -81,6 +81,11 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(schema["strip_recent_self_meme_context"]["default"], True)
         self.assertEqual(schema["guard_own_media_attribution"]["default"], True)
 
+    def test_task_execution_guard_defaults(self):
+        schema = self._schema()
+        self.assertEqual(schema["enable_task_execution_guard"]["default"], True)
+        self.assertTrue(schema["enable_task_execution_guard"].get("invisible", False))
+
 
 if __name__ == "__main__":
     unittest.main()

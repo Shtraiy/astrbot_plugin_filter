@@ -40,6 +40,13 @@
     "default": true,
     "invisible": true
   },
+  "enable_task_execution_guard": {
+    "description": "注入任务执行指令",
+    "type": "bool",
+    "hint": "开启后每次 LLM 请求的 system prompt 会追加一条指令，要求用户在要求搜索/查询/获取信息等任务时必须调用工具完成，禁止只回复“我帮你搜”“正在看”等承诺后停止。",
+    "default": true,
+    "invisible": true
+  },
   "merge_planning_ttl": {
     "description": "规划期状态保留时长（秒）",
     "type": "float",
