@@ -5,6 +5,7 @@ from astrbot.api.message_components import File, Image, Plain
 
 from _astrbot_plugin_filter_test.self_reply_marker import (
     SelfReplyMarker,
+    annotate_memory_media_attribution,
     append_referenced_image_note,
     append_text_only_media_note,
     append_user_media_note,
@@ -223,6 +224,58 @@ def test_mark_recent_self_meme_context_keeps_normal_parts():
 
     assert mark_recent_self_meme_context(req) == 0
     assert req.extra_user_content_parts == [part]
+
+
+def test_memory_attribution_fix_annotates_expression_and_sticker_claims():
+    part = SimpleNamespace(
+        text=(
+            "之前用户用眼神看着我，用户的表情很无奈，"
+            "用户还发了一个表情包来回应。"
+        )
+    )
+    req = SimpleNamespace(extra_user_content_parts=[part])
+
+    assert annotate_memory_media_attribution(req) == 3
+    assert "用户用眼神（疑为机器人自己发送的表情包画面" in part.text
+    assert "用户的表情（疑为机器人自己发送的表情包画面" in part.text
+    assert "用户还发了一个表情包（疑为机器人自己发送的表情包" in part.text
+
+
+def test_memory_attribution_fix_is_idempotent():
+    part = SimpleNamespace(text="用户发了表情包，用户翻了个白眼")
+    req = SimpleNamespace(extra_user_content_parts=[part])
+
+    assert annotate_memory_media_attribution(req) == 2
+    assert annotate_memory_media_attribution(req) == 0
+    assert part.text.count("疑为机器人自己发送") == 2
+
+
+def test_memory_attribution_fix_skips_negated_or_true_statements():
+    part = SimpleNamespace(
+        text=(
+            "用户没有发送表情包。"
+            "不是用户发送的表情包。"
+            "用户本轮没有发送这张表情包。"
+            "用户发了一张普通图片。"
+        )
+    )
+    req = SimpleNamespace(extra_user_content_parts=[part])
+
+    assert annotate_memory_media_attribution(req) == 0
+    assert "疑为机器人自己发送" not in part.text
+
+
+def test_memory_attribution_fix_handles_dict_parts_and_counts():
+    req = SimpleNamespace(
+        extra_user_content_parts=[
+            {"type": "text", "text": "用户的眼神很可怕。"},
+            {"type": "text", "text": "完全不相关的普通内容。"},
+        ]
+    )
+
+    assert annotate_memory_media_attribution(req) == 1
+    assert "用户的眼神（疑为机器人自己发送的表情包画面" in req.extra_user_content_parts[0]["text"]
+    assert req.extra_user_content_parts[1]["text"] == "完全不相关的普通内容。"
 
 
 def test_strip_recent_self_meme_context_keeps_normal_parts():

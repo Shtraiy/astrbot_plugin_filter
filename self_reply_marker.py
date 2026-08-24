@@ -69,6 +69,40 @@ _BOT_MEME_FIELD_KEYWORDS = (
     "图片文字：",
     "标签：",
 )
+_MEMORY_EXPRESSION_MARK = (
+    "（疑为机器人自己发送的表情包画面，历史总结可能误判，用户并未做出该表情/眼神）"
+)
+_MEMORY_STICKER_MARK = (
+    "（疑为机器人自己发送的表情包，历史总结可能误判，用户并未发送）"
+)
+_MISATTRIBUTION_FIXES = [
+    (
+        re.compile(
+            r"用户(?:正|又|还|在)?用[^，。；！？\n]{0,8}"
+            r"(?:眼神|眼睛|表情|神态)(?!（疑为)"
+        ),
+        _MEMORY_EXPRESSION_MARK,
+    ),
+    (
+        re.compile(r"用户(?:的)?(?:眼神|表情|神态)(?!（疑为)"),
+        _MEMORY_EXPRESSION_MARK,
+    ),
+    (
+        re.compile(r"用户(?:满脸|一脸|神情)[^，。；！？\n]{0,4}(?!（疑为)"),
+        _MEMORY_EXPRESSION_MARK,
+    ),
+    (
+        re.compile(r"用户(?:翻了个?)?白眼(?!（疑为)"),
+        _MEMORY_EXPRESSION_MARK,
+    ),
+    (
+        re.compile(
+            r"(?<!不是)(?<!并非)用户(?:给我|向我|又|还)?"
+            r"(?:发送|发了|发过|发来|发)(?:一张|一个|个|张)?(?:的)?表情包(?!（疑为)"
+        ),
+        _MEMORY_STICKER_MARK,
+    ),
+]
 _SENDER_ASSISTANT = "机器人自己发送的"
 _SENDER_USER = "用户发送的"
 _SENDER_USER_CURRENT = "用户本轮发送的"
@@ -647,6 +681,43 @@ def _set_part_text(part: Any, text: str) -> bool:
         return False
 
 
+def annotate_memory_media_attribution(req: Any) -> int:
+    """In-place fix of misattributed media/expression claims in injected memory.
+
+    livingmemory summaries can claim the user sent the bot's own memes or made
+    facial expressions visible inside them. A trailing ``<self_reply_mark>``
+    correction can be outranked by that memory text, so this rewrites the
+    offending phrases in place (request copy only, never persisted). Returns
+    the number of phrases fixed.
+    """
+    parts = getattr(req, "extra_user_content_parts", None)
+    if not isinstance(parts, list):
+        return 0
+    fixed = 0
+    for part in parts:
+        text = _part_text(part)
+        if not text:
+            continue
+        rewritten, part_fixed = _fix_memory_attribution_text(text)
+        if part_fixed and _set_part_text(part, rewritten):
+            fixed += part_fixed
+    return fixed
+
+
+def _fix_memory_attribution_text(text: str) -> tuple[str, int]:
+    fixed = 0
+
+    for pattern, mark in _MISATTRIBUTION_FIXES:
+
+        def _repl(match: re.Match, mark=mark) -> str:
+            nonlocal fixed
+            fixed += 1
+            return match.group(0) + mark
+
+        text = pattern.sub(_repl, text)
+    return text, fixed
+
+
 def _split_meme_block(text: str) -> tuple[str, str, str]:
     """Split a <recent_sent_meme> part into (prefix, field-body, tail)."""
     start = text.find("<recent_sent_meme>")
@@ -770,6 +841,7 @@ def _make_text_part(text: str) -> Any | None:
 __all__ = [
     "MAX_MARK_ENTRIES",
     "SelfReplyMarker",
+    "annotate_memory_media_attribution",
     "append_text_only_media_note",
     "append_referenced_image_note",
     "append_user_media_note",

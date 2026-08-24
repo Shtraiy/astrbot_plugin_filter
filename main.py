@@ -30,6 +30,7 @@ from .onboarding_guard import OnboardingGuard
 from .reply_coordinator import ReplyCoordinator
 from .self_reply_marker import (
     SelfReplyMarker,
+    annotate_memory_media_attribution,
     append_referenced_image_note,
     append_text_only_media_note,
     append_user_media_note,
@@ -318,6 +319,13 @@ class LanguageLogicOptimizer(Star):
             marked = mark_context_media_ownership(req)
             if marked:
                 logger.info("[自回复标记] 已标注 %d 条历史消息的媒体归属", marked)
+            if self._get_config("fix_memory_media_attribution", True):
+                fixed = annotate_memory_media_attribution(req)
+                if fixed:
+                    logger.info(
+                        "[自回复标记] 已就地纠偏记忆中的媒体/表情归属误判 %d 处",
+                        fixed,
+                    )
             marker = self._get_self_reply_marker()
             if self._get_config("enable_self_reply_mark", True):
                 if marker.mark_own_recent_replies(req, event):

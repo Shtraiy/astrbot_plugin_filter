@@ -81,6 +81,13 @@
     "default": true,
     "invisible": true
   },
+  "fix_memory_media_attribution": {
+    "description": "就地纠偏记忆中的媒体/表情归属误判",
+    "type": "bool",
+    "hint": "livingmemory 等插件注入的记忆总结若声称“用户发送了表情包”“用户用眼神/表情/神态看着你”等，可能是把机器人自己发送的表情包画面写成了用户行为；开启后会在这些短语处就地追加纠偏标注（仅当前请求，不写回记忆），防止末尾的归属提示被记忆文本盖过。",
+    "default": true,
+    "invisible": true
+  },
   "strip_recent_self_meme_context": {
     "description": "（兼容旧配置）剔除上一轮自发表情包描述注入",
     "type": "bool",
