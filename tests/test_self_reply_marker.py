@@ -11,6 +11,7 @@ from _astrbot_plugin_filter_test.self_reply_marker import (
     attach_quoted_images,
     has_referenced_image,
     has_user_media,
+    mark_current_prompt_media_boundary,
     mark_context_media_ownership,
     strip_recent_self_meme_context,
 )
@@ -42,6 +43,7 @@ def test_record_and_mark_recent_reply():
     assert "机器人自己" in text
     assert "meme.png" in text
     assert "好的" in text
+    assert "不能假定用户本轮又发了同一张" in text
 
 
 def test_record_ignores_empty_replies():
@@ -241,6 +243,17 @@ def test_append_user_media_note():
     assert "assistant" in text
 
 
+def test_append_user_media_note_embeds_current_media_names():
+    event = FakeEvent("u1", "group:1", chain=[Image("file:///new.png")])
+    req = SimpleNamespace(extra_user_content_parts=[])
+
+    assert append_user_media_note(req, event) is True
+    text = req.extra_user_content_parts[0].text
+    assert "new.png" in text
+    assert "不能假定用户本轮又发了同一张" in text
+    assert "直接说明无法看到" in text
+
+
 def test_attach_quoted_images_adds_path_and_note():
     quote = SimpleNamespace(
         type="Reply",
@@ -333,15 +346,97 @@ def test_mark_context_media_ownership_annotates_object_parts():
     assert assistant_part.text.startswith("[机器人自己发送]")
 
 
-def test_mark_context_media_ownership_skips_string_content():
+def test_mark_context_media_ownership_annotates_string_placeholders():
     req = SimpleNamespace(
         contexts=[
-            {"role": "assistant", "content": "[Image] 旧图"},
-            {"role": "user", "content": "纯文字"},
+            {"role": "assistant", "content": "这图哪来的 [图片] 旧图"},
+            {"role": "user", "content": "[图片]"},
         ]
     )
 
+    assert mark_context_media_ownership(req) == 2
+    assert "[机器人自己发送的图片]" in req.contexts[0]["content"]
+    assert "[用户发送的图片]" in req.contexts[1]["content"]
+
+
+def test_mark_context_media_ownership_string_annotation_is_idempotent():
+    req = SimpleNamespace(
+        contexts=[
+            {"role": "assistant", "content": "旧图 [图片]"},
+        ]
+    )
+
+    assert mark_context_media_ownership(req) == 1
     assert mark_context_media_ownership(req) == 0
+    assert "[机器人自己发送的图片]" in req.contexts[0]["content"]
+    assert "[图片]" not in req.contexts[0]["content"]
+
+
+def test_mark_context_media_ownership_annotates_text_placeholder_parts():
+    req = SimpleNamespace(
+        contexts=[
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "[图片] 机器人发的"},
+                    {"type": "image", "image": "x.png"},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "[图片] 我的图"},
+                    {"type": "image", "image": "y.png"},
+                ],
+            },
+        ]
+    )
+
+    assert mark_context_media_ownership(req) == 2
+    assistant_parts = req.contexts[0]["content"]
+    user_parts = req.contexts[1]["content"]
+    assert any(
+        "[机器人自己发送的图片]" in str(part.get("text", ""))
+        for part in assistant_parts
+    )
+    assert any(
+        "[用户发送的图片]" in str(part.get("text", "")) for part in user_parts
+    )
+
+
+def test_mark_current_prompt_media_boundary_rewrites_placeholder():
+    event = FakeEvent("u1", "group:1", chain=[Image("file:///new.png")])
+    req = SimpleNamespace(prompt="[图片]", extra_user_content_parts=[])
+
+    assert mark_current_prompt_media_boundary(req, event) is True
+    assert req.prompt == "[用户本轮发送的图片]"
+
+
+def test_mark_current_prompt_media_boundary_skips_text_only_message():
+    event = FakeEvent("u1", "group:1", "纯文字")
+    req = SimpleNamespace(prompt="[图片]", extra_user_content_parts=[])
+
+    assert mark_current_prompt_media_boundary(req, event) is False
+    assert req.prompt == "[图片]"
+
+
+def test_mark_current_prompt_media_boundary_noop_without_placeholder():
+    event = FakeEvent("u1", "group:1", chain=[Image("file:///new.png")])
+    req = SimpleNamespace(
+        prompt="用户发送了一张图片，请识别。", extra_user_content_parts=[]
+    )
+
+    assert mark_current_prompt_media_boundary(req, event) is False
+    assert "用户发送了一张图片" in req.prompt
+
+
+def test_mark_current_prompt_media_boundary_is_idempotent():
+    event = FakeEvent("u1", "group:1", chain=[Image("file:///new.png")])
+    req = SimpleNamespace(prompt="[图片]", extra_user_content_parts=[])
+
+    assert mark_current_prompt_media_boundary(req, event) is True
+    assert mark_current_prompt_media_boundary(req, event) is False
+    assert req.prompt == "[用户本轮发送的图片]"
 
 
 def test_mark_context_media_ownership_is_idempotent():

@@ -36,6 +36,7 @@ from .self_reply_marker import (
     attach_quoted_images,
     has_referenced_image,
     has_user_media,
+    mark_current_prompt_media_boundary,
     mark_context_media_ownership,
     strip_recent_self_meme_context,
 )
@@ -328,7 +329,14 @@ class LanguageLogicOptimizer(Star):
                 except Exception:
                     user_has_media = False
                 if user_has_media:
-                    if append_user_media_note(req):
+                    try:
+                        if mark_current_prompt_media_boundary(req, event):
+                            logger.info("[自回复标记] 已标注当前消息媒体归属")
+                    except Exception:
+                        logger.debug(
+                            "[自回复标记] 当前消息媒体标注失败", exc_info=True
+                        )
+                    if append_user_media_note(req, event):
                         logger.info("[自回复标记] 用户媒体消息，已注入归属提示")
                 else:
                     try:

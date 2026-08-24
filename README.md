@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.23-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.24-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -131,6 +131,11 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.24
+
+- **修复**：边界归属标注覆盖不到位——机器人自己发送的“真是H”表情包仍被模型当成用户本轮新发的图。此前 `mark_context_media_ownership` 只会标注结构化（list）媒体块，历史里以 `[图片]` 文本占位符/字符串承载的媒体完全没被标注（日志表现为图片轮次不再出现“已标注 N 条”）；现在字符串与文本占位符也会按角色就地标注（`[机器人自己发送的图片]` / `[用户发送的图片]`），并在用户本轮发图时把当前 `req.prompt` 里的 `[图片]` 占位符就地改写为 `[用户本轮发送的图片]`，模型不再把历史里机器人自己的表情包绑到本轮附件上。
+- **增强**：`<user_media_note>` 现在内嵌用户本轮媒体文件名，并明确“即使最近刚出现过某张表情包，也不能假定用户本轮又发了同一张；若看不到图片实际内容，不要根据记忆/历史猜测”；`<self_reply_mark>` 增加同款边界声明，防止模型把机器人自己发送过的表情包内容（画面/配字）描述成用户本轮发送的。
 
 ### v3.0.23
 

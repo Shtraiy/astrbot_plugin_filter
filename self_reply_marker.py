@@ -8,6 +8,7 @@ and injects an objective attribution block before each LLM request.
 
 from __future__ import annotations
 
+import re
 import time
 from collections import deque
 from collections.abc import Mapping
@@ -47,13 +48,30 @@ _REFERENCED_IMAGE_NOTE = (
     "但不要声称用户刚刚发送了它。"
     "</referenced_image_note>"
 )
-_USER_MEDIA_NOTE = (
-    "<user_media_note>"
-    "用户本轮发送了图片/文件，这些图片/文件是用户发送的。"
-    "上下文历史中 assistant（机器人）消息里的图片/文件是机器人自己发送的，不属于用户。"
-    "请优先识别并回答用户本轮发送的图片；"
-    "不要把机器人自己在历史中发送的表情包/图片描述成用户本轮发送的。"
-    "</user_media_note>"
+_SENDER_ASSISTANT = "机器人自己发送的"
+_SENDER_USER = "用户发送的"
+_SENDER_USER_CURRENT = "用户本轮发送的"
+_MEDIA_PART_PREFIX_ASSISTANT = "[机器人自己发送]"
+_MEDIA_PART_PREFIX_USER = "[用户发送]"
+
+_PLACEHOLDER_KIND = {
+    "图片": "图片",
+    "Image": "图片",
+    "image": "图片",
+    "表情": "图片",
+    "文件": "文件",
+    "File": "文件",
+    "file": "文件",
+    "音频": "音频",
+    "语音": "音频",
+    "Audio": "音频",
+    "audio": "音频",
+    "视频": "视频",
+    "Video": "视频",
+    "video": "视频",
+}
+_MEDIA_PLACEHOLDER_RE = re.compile(
+    r"\[(" + "|".join(re.escape(k) for k in _PLACEHOLDER_KIND) + r")\]"
 )
 
 
@@ -188,6 +206,12 @@ class SelfReplyMarker:
             "用户引用历史消息中的图片提问时，该图片是用户当前询问的对象"
             "（即使它是机器人自己之前发送的），需要识别分析，但仍应说清它的真实发送者。"
         )
+        lines.append(
+            "用户本轮消息附带的图片/文件才是用户本轮发送的；机器人上面列出的内容"
+            "（含表情包图片）是机器人自己发送的。禁止把机器人自己发送的表情包内容"
+            "（画面、配字）当作对用户本轮图片的描述；即使最近刚出现过某张表情包，"
+            "也不能假定用户本轮又发了同一张，除非用户本轮消息确实附带了该图片。"
+        )
         lines.append("</self_reply_mark>")
         return "\n".join(lines)
 
@@ -199,17 +223,7 @@ class SelfReplyMarker:
 
     @staticmethod
     def _describe_media(comp: Any) -> str:
-        name = ""
-        for attr in ("name", "file", "url", "path"):
-            value = getattr(comp, attr, None)
-            if isinstance(value, str) and value.strip():
-                name = value.strip()
-                break
-        kind = "图片" if isinstance(comp, Image) else "文件"
-        if name:
-            basename = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-            return f"[{kind}] {basename}"
-        return f"[{kind}]"
+        return _describe_media_component(comp)
 
     def _append_temp_part(self, req: Any, text: str) -> bool:
         return _append_note_part(req, text)
@@ -303,10 +317,12 @@ def mark_context_media_ownership(req: Any) -> int:
     """Annotate media blocks in request history with role ownership.
 
     Media inside assistant-role history entries becomes
-    ``[机器人自己发送]``, media inside user-role entries becomes
-    ``[用户发送]``. The request contexts are a per-request copy loaded from
-    conversation history, so nothing is written back to AstrBot history.
-    Returns the number of annotated messages.
+    ``[机器人自己发送]``/``[机器人自己发送的图片]``, media inside user-role
+    entries becomes ``[用户发送]``/``[用户发送的图片]``. Both structured
+    (OpenAI content part lists) and string-placeholder history (``[图片]``)
+    are annotated in place. The request contexts are a per-request copy
+    loaded from conversation history, so nothing is written back to AstrBot
+    history. Returns the number of annotated messages.
     """
     contexts = request_contexts(req)
     if not contexts:
@@ -315,54 +331,149 @@ def mark_context_media_ownership(req: Any) -> int:
     for entry in contexts:
         role = str(entry_role(entry) or "").casefold()
         if role in {"assistant", "bot", "ai"}:
-            prefix = "[机器人自己发送]"
+            part_prefix = _MEDIA_PART_PREFIX_ASSISTANT
+            placeholder_sender = _SENDER_ASSISTANT
         elif role == "user":
-            prefix = "[用户发送]"
+            part_prefix = _MEDIA_PART_PREFIX_USER
+            placeholder_sender = _SENDER_USER
         else:
             continue
         content = entry_content(entry)
         if isinstance(content, str):
+            replaced = _annotate_placeholder_text(content, placeholder_sender)
+            if replaced != content:
+                _set_entry_content(entry, replaced)
+                marked += 1
             continue
-        if _annotate_media_blocks(content, prefix):
+        if _annotate_media_blocks(content, part_prefix, placeholder_sender):
             marked += 1
     return marked
 
 
-def _annotate_media_blocks(content: Any, prefix: str) -> bool:
+def mark_current_prompt_media_boundary(req: Any, event: Any) -> bool:
+    """Annotate the current user prompt's media placeholders in place.
+
+    AstrBot keeps the current turn in ``req.prompt`` while history lives in
+    ``req.contexts``. When the current message actually carries media, rewrite
+    ``[图片]``-style placeholders in the prompt to ``[用户本轮发送的图片]`` so
+    the model can bind this turn's attachment exactly instead of guessing from
+    older context. Returns True when the prompt was rewritten.
+    """
+    if req is None:
+        return False
+    chain = get_message_chain(event)
+    if not chain or not any(is_media_part(comp) for comp in chain):
+        return False
+    prompt = getattr(req, "prompt", None)
+    if not isinstance(prompt, str) or not prompt.strip():
+        return False
+    replaced = _annotate_placeholder_text(prompt, _SENDER_USER_CURRENT)
+    if replaced == prompt:
+        return False
+    try:
+        req.prompt = replaced
+        return True
+    except Exception:
+        return False
+
+
+def _set_entry_content(entry: Any, value: str) -> bool:
+    if isinstance(entry, Mapping):
+        entry["content"] = value
+        return True
+    try:
+        entry.content = value
+        return True
+    except Exception:
+        return False
+
+
+def _annotate_placeholder_text(text: str, sender: str) -> str:
+    """Rewrite ``[图片]``-style tokens to ``[<sender>图片]``-style tokens."""
+
+    def repl(match: re.Match) -> str:
+        kind = _PLACEHOLDER_KIND.get(match.group(1), match.group(1))
+        return f"[{sender}{kind}]"
+
+    return _MEDIA_PLACEHOLDER_RE.sub(repl, text)
+
+
+def _annotate_media_blocks(
+    content: Any,
+    part_prefix: str,
+    placeholder_sender: str,
+) -> bool:
     """Prefix media blocks inside a message content structure. Returns True if changed."""
     changed = False
     if isinstance(content, list):
         for item in content:
-            if _annotate_media_block(item, prefix):
+            if _annotate_media_block(item, part_prefix, placeholder_sender):
                 changed = True
     elif isinstance(content, Mapping):
         if is_media_part(content):
-            return _prefix_media_mapping(content, prefix)
+            return _prefix_media_mapping(content, part_prefix)
         nested = content.get("content")
-        if nested is not None:
-            if _annotate_media_blocks(nested, prefix):
+        if isinstance(nested, list):
+            if _annotate_media_blocks(nested, part_prefix, placeholder_sender):
                 changed = True
+        elif isinstance(nested, str) and nested.strip():
+            replaced = _annotate_placeholder_text(nested, placeholder_sender)
+            if replaced != nested:
+                content["content"] = replaced
+                changed = True
+        else:
+            text = content.get("text")
+            if isinstance(text, str) and text.strip():
+                replaced = _annotate_placeholder_text(text, placeholder_sender)
+                if replaced != text:
+                    content["text"] = replaced
+                    changed = True
     return changed
 
 
-def _annotate_media_block(item: Any, prefix: str) -> bool:
+def _annotate_media_block(
+    item: Any,
+    part_prefix: str,
+    placeholder_sender: str,
+) -> bool:
     if isinstance(item, Mapping):
         if is_media_part(item):
-            return _prefix_media_mapping(item, prefix)
+            return _prefix_media_mapping(item, part_prefix)
         nested = item.get("content")
         if isinstance(nested, list):
-            return _annotate_media_blocks(nested, prefix)
+            return _annotate_media_blocks(nested, part_prefix, placeholder_sender)
+        if isinstance(nested, str) and nested.strip():
+            replaced = _annotate_placeholder_text(nested, placeholder_sender)
+            if replaced != nested:
+                item["content"] = replaced
+                return True
+            return False
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            replaced = _annotate_placeholder_text(text, placeholder_sender)
+            if replaced != text:
+                item["text"] = replaced
+                return True
+        return False
+    text = str(getattr(item, "text", "") or "").strip()
+    if not text:
         return False
     if is_media_part(item):
-        text = str(getattr(item, "text", "") or "").strip()
-        if text.startswith(prefix):
+        if text.startswith(part_prefix):
             return False
         try:
-            item.text = f"{prefix} {text}".strip()
+            item.text = f"{part_prefix} {text}".strip()
             return True
         except Exception:
             return False
-    return False
+    replaced = _annotate_placeholder_text(text, placeholder_sender)
+    if replaced == text:
+        return False
+    try:
+        item.text = replaced
+        return True
+    except Exception:
+        return False
 
 
 def _prefix_media_mapping(item: Mapping, prefix: str) -> bool:
@@ -404,9 +515,59 @@ def append_referenced_image_note(req: Any) -> bool:
     return _append_note_part(req, _REFERENCED_IMAGE_NOTE)
 
 
-def append_user_media_note(req: Any) -> bool:
-    """Append a note clarifying which media in the request belongs to the user."""
-    return _append_note_part(req, _USER_MEDIA_NOTE)
+def append_user_media_note(req: Any, event: Any = None) -> bool:
+    """Append a note clarifying which media in the request belongs to the user.
+
+    When ``event`` is given, the current turn's media file names are embedded
+    so the model can match this turn's attachment exactly instead of guessing
+    from older memes.
+    """
+    return _append_note_part(req, _user_media_note(event))
+
+
+def _user_media_note(event: Any) -> str:
+    names = _current_media_names(event)
+    media_desc = f"（文件：{'、'.join(names)}）" if names else ""
+    return (
+        "<user_media_note>"
+        "用户本轮发送了图片/文件，这些图片/文件是用户发送的"
+        f"{media_desc}。"
+        "上下文历史中 assistant（机器人）消息里的图片/文件是机器人自己发送的，不属于用户；"
+        "禁止把机器人历史中自己发送的表情包内容（画面、配字）说成用户本轮发送的。"
+        "即使最近刚出现过某张表情包，也不能假定用户本轮又发了同一张；"
+        "请优先识别并回答用户本轮发送的图片。"
+        "若无法看到用户本轮图片的实际内容，不要根据记忆或历史描述猜测图片内容，"
+        "直接说明无法看到。"
+        "</user_media_note>"
+    )
+
+
+def _current_media_names(event: Any) -> list[str]:
+    chain = get_message_chain(event)
+    if not chain:
+        return []
+    names: list[str] = []
+    for comp in chain:
+        if not is_media_part(comp):
+            continue
+        desc = _describe_media_component(comp)
+        if desc and desc not in names:
+            names.append(desc)
+    return names
+
+
+def _describe_media_component(comp: Any) -> str:
+    name = ""
+    for attr in ("name", "file", "url", "path"):
+        value = getattr(comp, attr, None)
+        if isinstance(value, str) and value.strip():
+            name = value.strip()
+            break
+    kind = "图片" if isinstance(comp, Image) else "文件"
+    if name:
+        basename = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        return f"[{kind}] {basename}"
+    return f"[{kind}]"
 
 
 def _append_note_part(req: Any, note: str) -> bool:
@@ -457,6 +618,7 @@ __all__ = [
     "attach_quoted_images",
     "has_referenced_image",
     "has_user_media",
+    "mark_current_prompt_media_boundary",
     "mark_context_media_ownership",
     "strip_recent_self_meme_context",
 ]
