@@ -28,6 +28,10 @@ from .event_access import (
 
 MAX_MERGE_STATES = 4096
 _MENTION_LEAD_RE = re.compile(r"^\s*(?:@[^\s，。！？!?；;、]+)\s*")
+_MULTI_MESSAGE_NOTE = (
+    "（以上是用户在同一次唤醒中连续发送的 {count} 条消息，"
+    "请整体回应，不要遗漏任何一条。）"
+)
 
 
 @dataclass
@@ -35,6 +39,7 @@ class _MergeState:
     owner_event: Any
     phase: str
     pending_text: str
+    segments: list[str] = field(default_factory=list)
     pending_media: list[Any] = field(default_factory=list)
     captured_events: set[Any] = field(default_factory=set)
     captured_count: int = 0
@@ -88,11 +93,45 @@ class MergeWindowManager:
 
     @classmethod
     def join_text(cls, earlier: str, later: str) -> str:
-        cleaned = _MENTION_LEAD_RE.sub("", later or "").strip()
+        cleaned = cls._clean_segment(later)
         earlier = (earlier or "").strip()
         if not cleaned:
             return earlier
         return earlier + "\n" + cleaned if earlier else cleaned
+
+    @staticmethod
+    def _clean_segment(text: str) -> str:
+        return _MENTION_LEAD_RE.sub("", text or "").strip()
+
+    @classmethod
+    def append_segment(cls, segments: list[str], text: str) -> list[str]:
+        """Append one user-message segment, returning the updated list."""
+        cleaned = cls._clean_segment(text)
+        base = [seg for seg in (segments or []) if str(seg or "").strip()]
+        if cleaned:
+            base.append(cleaned)
+        return base
+
+    @classmethod
+    def format_segments(cls, segments: list[str]) -> str:
+        """Number merged user-message segments so the model answers all of them.
+
+        A single segment stays as its raw text; multiple segments are labeled
+        ``用户消息1/2/...`` and closed with a note asking the model not to miss
+        any of them.
+        """
+        texts = [
+            str(seg or "").strip()
+            for seg in (segments or [])
+            if str(seg or "").strip()
+        ]
+        if not texts:
+            return ""
+        if len(texts) == 1:
+            return texts[0]
+        lines = [f"用户消息{i + 1}：{text}" for i, text in enumerate(texts)]
+        lines.append(_MULTI_MESSAGE_NOTE.format(count=len(texts)))
+        return "\n".join(lines)
 
     def start_window(self, event: Any) -> bool:
         key = self.window_key(event)
@@ -107,6 +146,7 @@ class MergeWindowManager:
             owner_event=event,
             phase="window",
             pending_text=str(getattr(event, "message_str", "") or "").strip(),
+            segments=[str(getattr(event, "message_str", "") or "").strip()],
         )
         return True
 
@@ -177,6 +217,7 @@ class MergeWindowManager:
             return False
         if text:
             state.pending_text = self.join_text(state.pending_text, text)
+            state.segments.append(self._clean_segment(text))
         state.pending_media.extend(media)
         state.captured_events.add(event)
         state.captured_count += 1
@@ -213,6 +254,7 @@ class MergeWindowManager:
             return False
         if text:
             state.pending_text = self.join_text(state.pending_text, text)
+            state.segments.append(self._clean_segment(text))
         state.pending_media.extend(media)
         state.captured_events.add(event)
         state.captured_count += 1
@@ -227,7 +269,7 @@ class MergeWindowManager:
         state = self._states.get(key)
         if state is None or state.owner_event is not event:
             return str(getattr(event, "message_str", "") or "")
-        merged = state.pending_text
+        merged = self.format_segments(state.segments)
         self.attach_media(event, state.pending_media)
         state.pending_media = []
         state.phase = "planning"
@@ -236,7 +278,7 @@ class MergeWindowManager:
         self._record_last_message_id(event, state.last_captured_id)
         return merged
 
-    def take_planning(self, event: Any) -> tuple[Any, str, list[Any], Any] | None:
+    def take_planning(self, event: Any) -> tuple[Any, list[str], list[Any]] | None:
         """Consume the planning state; return (old_event, text, media, task)."""
         key = self.window_key(event)
         if key is None:
@@ -250,12 +292,12 @@ class MergeWindowManager:
         self._states.pop(key, None)
         media = self._event_media(state.owner_event)
         media.extend(state.pending_media)
-        return (state.owner_event, state.pending_text, media)
+        return (state.owner_event, list(state.segments), media)
 
     def rearm_planning(
         self,
         event: Any,
-        merged_text: str,
+        segments: list[str],
     ) -> bool:
         """Re-create a planning state for a regenerated event."""
         key = self.window_key(event)
@@ -266,7 +308,14 @@ class MergeWindowManager:
         self._states[key] = _MergeState(
             owner_event=event,
             phase="planning",
-            pending_text=str(merged_text or "").strip(),
+            pending_text="\n".join(
+                str(seg or "").strip() for seg in (segments or [])
+            ).strip(),
+            segments=[
+                str(seg or "").strip()
+                for seg in (segments or [])
+                if str(seg or "").strip()
+            ],
             planning_started_at=self._now(),
         )
         return True
@@ -280,7 +329,12 @@ class MergeWindowManager:
         state = self._states.get(key)
         if state is None or state.owner_event is not event:
             return
-        state.pending_text = str(text or "").strip()
+        clean = str(text or "").strip()
+        if clean == self.format_segments(state.segments):
+            state.pending_text = clean
+            return
+        state.pending_text = clean
+        state.segments = [clean] if clean else []
 
     def clear_state(self, event: Any) -> None:
         """Drop the state once the owner's reply is decorated or sent."""

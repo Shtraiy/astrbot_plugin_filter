@@ -208,18 +208,20 @@ class LanguageLogicOptimizer(Star):
         pending = merger.take_planning(event)
         if pending is None:
             return False
-        old_event, earlier_text, earlier_media = pending
+        old_event, earlier_segments, earlier_media = pending
         if old_event is not None:
             self._request_agent_stop(event)
             self._mark_agent_stop_requested(old_event)
             coordinator.supersede_active_event(old_event)
-        event.message_str = merger.join_text(
-            earlier_text,
+        segments = merger.append_segment(
+            earlier_segments,
             str(getattr(event, "message_str", "") or ""),
         )
+        event.message_str = merger.format_segments(segments)
         merger.attach_media(event, earlier_media)
         if not (event.message_str or "").strip() and merger.has_media(event):
             event.message_str = MEDIA_ONLY_PROMPT
+            segments = [event.message_str]
         if not await coordinator.admit_wakeup(event):
             return True
         try:
@@ -228,7 +230,7 @@ class LanguageLogicOptimizer(Star):
                 event.set_extra("merge_last_message_id", last_id)
         except Exception:
             logger.debug("[消息合并] 记录最后消息引用失败", exc_info=True)
-        merger.rearm_planning(event, event.message_str)
+        merger.rearm_planning(event, segments)
         return True
 
     async def _open_merge_window(

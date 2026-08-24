@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.26-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.27-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -18,7 +18,7 @@
 
 ## 主要能力
 
-- 收到唤醒后开启短窗口（默认 6 秒），把同一用户后续发送的分段消息合并进同一次 LLM 请求。
+- 收到唤醒后开启短窗口（默认 6 秒），把同一用户后续发送的分段消息合并进同一次 LLM 请求；多条消息会编号为"用户消息1/用户消息2/…"并提示模型整体回应、不要遗漏任何一条。
 - 纯图片/文件消息（无文字）在窗口结束后自动补充识图提示（"用户发送了一张图片/文件，请识别内容并回应"），保证模型聚焦当前附件而不是历史里机器人自己发的图。
 - "先发图、再引用该图并 @bot 提问"的场景：窗口期收到带引用的唤醒消息时自动取消纯图窗口（不会重复回复），由 AstrBot 原生处理引用图。
 - 窗口期内**带不带唤醒词**都会合并；群聊里不带 @ 的补充消息也会在规划期被自动提升并合并重生成。
@@ -131,6 +131,10 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.27
+
+- **增强**：合并多条分段消息时不再只是简单换行拼接——每条会被编号为"用户消息1/用户消息2/…"，末尾追加"以上是用户在同一次唤醒中连续发送的 N 条消息，请整体回应，不要遗漏任何一条"，避免模型只回应第一句（日志场景：用户连发"唉"、"看来你是真的没有了"，bot 只回了"叹什么气呀，又遇到什么烦心事了？"）。窗口期合并与规划期补充合并都生效。
 
 ### v3.0.26
 

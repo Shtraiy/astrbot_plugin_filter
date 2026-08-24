@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from astrbot.api.message_components import Image, Plain
 
+from _astrbot_plugin_filter_test.merge_window import MergeWindowManager
 from main import MEDIA_ONLY_PROMPT, _strip_structure_tags
 
 from tests.conftest import FakeEvent, make_optimizer
@@ -22,7 +23,7 @@ def test_two_segments_merge_into_one_wake():
 
     merged = asyncio.run(run())
 
-    assert merged.startswith("你可以发一个表情包吗")
+    assert "你可以发一个表情包吗" in merged
     assert "我觉得可爱的表情包不错" in merged
 
 
@@ -40,7 +41,7 @@ def test_wake_followup_during_window_is_merged_and_stopped():
 
     merged, stopped = asyncio.run(run())
 
-    assert merged == "第一段\n第二段"
+    assert merged == MergeWindowManager.format_segments(["第一段", "第二段"])
     assert stopped is True
 
 
@@ -56,7 +57,7 @@ def test_planning_supplement_supersedes_and_regenerates():
 
     merged, stopped = asyncio.run(run())
 
-    assert merged == "第一段\n补充"
+    assert merged == MergeWindowManager.format_segments(["第一段", "补充"])
     assert stopped is True
 
 
@@ -209,7 +210,7 @@ def test_media_only_supplement_gets_recognition_prompt_during_planning():
 
     merged = asyncio.run(run())
 
-    assert merged == f"{MEDIA_ONLY_PROMPT}\n补充"
+    assert merged == MergeWindowManager.format_segments([MEDIA_ONLY_PROMPT, "补充"])
 
 
 def test_media_supplement_keeps_existing_text_without_placeholder():
@@ -284,7 +285,7 @@ def test_plain_wake_followup_still_merges_during_window():
 
     merged, stopped = asyncio.run(run())
 
-    assert merged == "第一段\n补充"
+    assert merged == MergeWindowManager.format_segments(["第一段", "补充"])
     assert stopped is True
 
 
@@ -367,7 +368,7 @@ def test_window_captured_message_still_consumed():
         return first.message_str, second.stopped
 
     merged, stopped = asyncio.run(run())
-    assert merged == "第一段\n补充"
+    assert merged == MergeWindowManager.format_segments(["第一段", "补充"])
     assert stopped is True
 
 
@@ -438,7 +439,9 @@ def test_planning_merge_marks_old_event_agent_stop_requested():
     asyncio.run(optimizer.on_waiting_llm_request(second))
 
     assert first.get_extra("agent_stop_requested") is True
-    assert second.message_str == "第一段\n补充"
+    assert second.message_str == MergeWindowManager.format_segments(
+        ["第一段", "补充"]
+    )
 
 
 def test_stop_remark_reattaches_flag_after_astrbot_reset():
@@ -686,7 +689,9 @@ def test_provider_request_without_llm_output_still_interrupts_and_regenerates():
     asyncio.run(optimizer.on_waiting_llm_request(new))
 
     assert old.stopped is True  # 被打断
-    assert new.message_str == "第一段\n补充"  # 合并重生成
+    assert new.message_str == MergeWindowManager.format_segments(
+        ["第一段", "补充"]
+    )  # 合并重生成
 
 
 def test_correction_interrupts_even_after_llm_output_started():
@@ -699,7 +704,9 @@ def test_correction_interrupts_even_after_llm_output_started():
     asyncio.run(optimizer.on_waiting_llm_request(new))
 
     assert old.stopped is True
-    assert new.message_str == "第一段\n再想想"
+    assert new.message_str == MergeWindowManager.format_segments(
+        ["第一段", "再想想"]
+    )
 
 
 def test_llm_response_guard_marks_output_started():
@@ -849,7 +856,7 @@ def test_image_and_two_texts_within_window_merge_into_one_request():
 
     merged, chain, second_stopped, third_stopped = asyncio.run(run())
 
-    assert merged == "第一句\n第二句"
+    assert merged == MergeWindowManager.format_segments(["第一句", "第二句"])
     assert any(isinstance(comp, Image) for comp in chain)
     assert second_stopped is True
     assert third_stopped is True
@@ -875,7 +882,9 @@ def test_planning_supplements_keep_accumulating_text_and_image():
 
     merged, chain, first_stopped, second_stopped = asyncio.run(run())
 
-    assert merged == f"{MEDIA_ONLY_PROMPT}\n第一句\n第二句"
+    assert merged == MergeWindowManager.format_segments(
+        [MEDIA_ONLY_PROMPT, "第一句", "第二句"]
+    )
     assert any(isinstance(comp, Image) for comp in chain)
     assert first_stopped is True
     assert second_stopped is True
