@@ -239,6 +239,7 @@ def test_memory_attribution_fix_annotates_expression_and_sticker_claims():
     assert "用户用眼神（疑为机器人自己发送的表情包画面" in part.text
     assert "用户的表情（疑为机器人自己发送的表情包画面" in part.text
     assert "用户还发了一个表情包（疑为机器人自己发送的表情包" in part.text
+    assert "<memory_attribution_note>" in part.text
 
 
 def test_memory_attribution_fix_is_idempotent():
@@ -276,6 +277,40 @@ def test_memory_attribution_fix_handles_dict_parts_and_counts():
     assert annotate_memory_media_attribution(req) == 1
     assert "用户的眼神（疑为机器人自己发送的表情包画面" in req.extra_user_content_parts[0]["text"]
     assert req.extra_user_content_parts[1]["text"] == "完全不相关的普通内容。"
+
+
+def test_memory_attribution_fix_covers_duifang_phrases():
+    part = SimpleNamespace(
+        text="对方用那种眼神看着我，对方还发了一个表情包。"
+    )
+    req = SimpleNamespace(extra_user_content_parts=[part])
+
+    assert annotate_memory_media_attribution(req) == 2
+    assert "对方用那种眼神（疑为机器人自己发送的表情包画面" in part.text
+    assert "对方还发了一个表情包（疑为机器人自己发送的表情包" in part.text
+
+
+def test_memory_attribution_fix_places_disclaimer_after_memory_marker():
+    part = SimpleNamespace(
+        text="<RAG-Faiss-Memory>\n记忆 #1 用户的眼神很可怕。\n</RAG-Faiss-Memory>"
+    )
+    req = SimpleNamespace(extra_user_content_parts=[part])
+
+    assert annotate_memory_media_attribution(req) == 1
+    assert part.text.startswith(
+        "<RAG-Faiss-Memory>\n<memory_attribution_note>"
+    )
+    assert "<memory_attribution_note>" in part.text
+    assert "</RAG-Faiss-Memory>" in part.text
+
+
+def test_memory_attribution_fix_disclaimer_is_idempotent_with_duifang():
+    part = SimpleNamespace(text="对方翻了个白眼，对方发了表情包")
+    req = SimpleNamespace(extra_user_content_parts=[part])
+
+    assert annotate_memory_media_attribution(req) == 2
+    assert annotate_memory_media_attribution(req) == 0
+    assert part.text.count("<memory_attribution_note>") == 1
 
 
 def test_strip_recent_self_meme_context_keeps_normal_parts():

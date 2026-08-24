@@ -75,6 +75,15 @@ _MEMORY_EXPRESSION_MARK = (
 _MEMORY_STICKER_MARK = (
     "（疑为机器人自己发送的表情包，历史总结可能误判，用户并未发送）"
 )
+_MEMORY_ROLE_DISCLAIMER = (
+    "<memory_attribution_note>"
+    "以下记忆由长期记忆插件对历史消息的总结生成，总结可能没有严格区分消息发送者；"
+    "其中关于'用户/对方的表情、眼神、神态'以及'用户/对方发送表情包'的描述，"
+    "很可能源自机器人自己发送的表情包画面，是历史总结的误判；"
+    "除非有独立证据（例如用户本轮实际发送的图片/文件），"
+    "不要把这些内容当作用户的真实行为。"
+    "</memory_attribution_note>"
+)
 _MISATTRIBUTION_FIXES = [
     (
         re.compile(
@@ -98,6 +107,32 @@ _MISATTRIBUTION_FIXES = [
     (
         re.compile(
             r"(?<!不是)(?<!并非)用户(?:给我|向我|又|还)?"
+            r"(?:发送|发了|发过|发来|发)(?:一张|一个|个|张)?(?:的)?表情包(?!（疑为)"
+        ),
+        _MEMORY_STICKER_MARK,
+    ),
+    (
+        re.compile(
+            r"对方(?:正|又|还|在)?用[^，。；！？\n]{0,8}"
+            r"(?:眼神|眼睛|表情|神态)(?!（疑为)"
+        ),
+        _MEMORY_EXPRESSION_MARK,
+    ),
+    (
+        re.compile(r"对方(?:的)?(?:眼神|表情|神态)(?!（疑为)"),
+        _MEMORY_EXPRESSION_MARK,
+    ),
+    (
+        re.compile(r"对方(?:满脸|一脸|神情)[^，。；！？\n]{0,4}(?!（疑为)"),
+        _MEMORY_EXPRESSION_MARK,
+    ),
+    (
+        re.compile(r"对方(?:翻了个?)?白眼(?!（疑为)"),
+        _MEMORY_EXPRESSION_MARK,
+    ),
+    (
+        re.compile(
+            r"(?<!不是)(?<!并非)对方(?:给我|向我|又|还)?"
             r"(?:发送|发了|发过|发来|发)(?:一张|一个|个|张)?(?:的)?表情包(?!（疑为)"
         ),
         _MEMORY_STICKER_MARK,
@@ -698,10 +733,24 @@ def annotate_memory_media_attribution(req: Any) -> int:
         text = _part_text(part)
         if not text:
             continue
+        if "<memory_attribution_note>" in text:
+            continue
         rewritten, part_fixed = _fix_memory_attribution_text(text)
+        if part_fixed:
+            rewritten = _prepend_memory_role_disclaimer(rewritten)
         if part_fixed and _set_part_text(part, rewritten):
             fixed += part_fixed
     return fixed
+
+
+def _prepend_memory_role_disclaimer(text: str) -> str:
+    """Insert a block-level role disclaimer at the top of the memory part."""
+    for marker in ("<RAG-Faiss-Memory>", "<memory_block>", "<memory>"):
+        idx = text.find(marker)
+        if idx != -1:
+            end = idx + len(marker)
+            return text[:end] + "\n" + _MEMORY_ROLE_DISCLAIMER + "\n" + text[end:]
+    return _MEMORY_ROLE_DISCLAIMER + "\n" + text
 
 
 def _fix_memory_attribution_text(text: str) -> tuple[str, int]:
