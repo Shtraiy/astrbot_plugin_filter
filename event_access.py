@@ -62,7 +62,7 @@ def is_media_part(part: Any) -> bool:
     name = type(part).__name__.casefold()
     if any(token in name for token in _MEDIA_TYPE_TOKENS):
         return True
-    for attr in ("url", "file", "path", "image", "video"):
+    for attr in ("url", "file", "path", "image", "video", "image_url", "audio_url"):
         value = getattr(part, attr, None)
         if value is not None and str(value).strip():
             return True

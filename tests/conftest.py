@@ -225,7 +225,7 @@ def make_optimizer(**overrides):
         "enable_task_execution_guard": True,
         "enable_self_reply_mark": True,
         "self_reply_mark_minutes": 5.0,
-        "strip_recent_self_meme_context": True,
+        "mark_recent_self_meme_context": True,
         "guard_own_media_attribution": True,
         "enable_content_guard": True,
         "content_guard_mode": "balanced",

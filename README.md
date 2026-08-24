@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.25-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.26-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -32,7 +32,7 @@
 - 记录机器人最近发送的文本与媒体，并在每次请求前注入客观归属标记（`<self_reply_mark>`），保留 assistant 历史媒体的同时纠正归属误判。
 - 在请求上下文中按消息 role 直接标注媒体归属：历史 assistant 消息的媒体标 `[机器人自己发送]`、user 消息标 `[用户发送]`（请求级临时修改，不回写 AstrBot 历史）。
 - 校正声明在 livingmemory 等下游注入记忆之后生效（`on_llm_request` 后置钩子），避免被记忆"用户发过图"的错误总结盖过。
-- 继续剔除 meme_manager 等插件拼进用户消息的 `<recent_sent_meme>` 描述，防止模型误以为用户刚发了表情包。
+- 保留 meme_manager 等插件拼进用户消息的 `<recent_sent_meme>` 描述并改写成 `<bot_sent_meme>` 归属标记，明确"这张表情包是机器人（assistant）自己发送的、用户没有发送"，同时保留画面描述供用户追问"刚才那张图"时识别。
 - 用户消息注入媒体归属提示：有图时注入 `<user_media_note>`（当前附件是用户的、历史 assistant 图片是机器人自己的）、引用历史图片时注入 `<referenced_image_note>`（被引用图是询问对象）并**兜底把引用链里的图片附加进请求**（补 AstrBot 引用图提取失败的缺口）、纯文字无图时注入 `<media_note>`。
 - 群聊内容防护：词库拦截 + 诱导绕过检测 + 新群聊严格模式。
 
@@ -69,7 +69,7 @@
 | 是否合并图片/文件 | true | 图片/文件随文本合并 |
 | 合并时取消旧 pipeline 任务 | false | AstrBot 4.25+ 才有效，可真正取消旧请求 |
 | 自回复标记窗口（分钟） | 5.0 | 0 = 关闭标记窗口 |
-| 剔除 `<recent_sent_meme>` | true | 防止误判用户发了表情包 |
+| 保留并标记 `<recent_sent_meme>` | true | 把表情包描述改写为 `<bot_sent_meme>` 归属标记（关闭则回退为剔除） |
 | 纯文字消息归属提示 | true | 注入 `<media_note>` |
 | 新群聊严格防护时长（分钟） | 30.0 | 0 = 关闭时间限制 |
 | 新群聊严格防护消息数 | 20 | 0 = 关闭条数限制 |
@@ -131,6 +131,13 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.26
+
+- **修复**：`mark_context_media_ownership` 对没有 `text` 字段的对象媒体块（如 AstrBot `ImageURLPart` 风格的 `image_url` 内容块）之前会被"空文本提前返回"挡掉，导致历史 assistant 媒体没有被打上 `[机器人自己发送]` 归属标记（日志表现为图片轮次不再出现"已标注 N 条"）；现在无文本的媒体对象也会按角色就地标注，并附带文件名/URL 短标签；同时支持 `content` 为字符串列表时逐项标注。
+- **修复**：`is_media_part` 之前只识别 `url/file/path/image/video` 属性，识别不了以 `image_url`/`audio_url` 属性承载的对象媒体块，已补充。
+- **变更**：`<recent_sent_meme>` 不再被剔除——按你的要求保留在上下文里，但改写为 `<bot_sent_meme>` 归属标记：明确"这张表情包是机器人（assistant）自己上一轮发送的、用户本轮没有发送"，并禁止把它的画面/配字当作对用户表情、眼神或行为的描述；用户追问"刚才那张图/表情"时仍可依据保留的画面描述识别。
+- **配置**：新增 `mark_recent_self_meme_context`（默认 true）控制上述改写；关闭后回退为旧行为（直接剔除 `<recent_sent_meme>`）。
 
 ### v3.0.25
 

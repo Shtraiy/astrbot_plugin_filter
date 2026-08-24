@@ -38,6 +38,7 @@ from .self_reply_marker import (
     has_user_media,
     mark_current_prompt_media_boundary,
     mark_context_media_ownership,
+    mark_recent_self_meme_context,
     strip_recent_self_meme_context,
 )
 from .task_commitment_guard import inject_task_execution_instruction
@@ -319,7 +320,14 @@ class LanguageLogicOptimizer(Star):
             if self._get_config("enable_self_reply_mark", True):
                 if marker.mark_own_recent_replies(req, event):
                     logger.info("[自回复标记] 已注入最近自回复归属标记")
-            if self._get_config("strip_recent_self_meme_context", True):
+            if self._get_config("mark_recent_self_meme_context", True):
+                marked = mark_recent_self_meme_context(req)
+                if marked:
+                    logger.info(
+                        "[自回复标记] 已改写自发表情包描述为机器人归属标记 %d 处",
+                        marked,
+                    )
+            elif self._get_config("strip_recent_self_meme_context", False):
                 removed = strip_recent_self_meme_context(req)
                 if removed:
                     logger.info("[自回复标记] 已移除自发表情包描述 %d 处", removed)

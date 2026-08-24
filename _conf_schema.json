@@ -74,11 +74,18 @@
     "default": 5.0,
     "invisible": true
   },
-  "strip_recent_self_meme_context": {
-    "description": "剔除上一轮自发表情包描述注入",
+  "mark_recent_self_meme_context": {
+    "description": "保留上一轮自发表情包描述并标记为机器人自己发送",
     "type": "bool",
-    "hint": "每次请求都移除 meme_manager 等插件注入的 <recent_sent_meme> 文本块。该文本块会拼进用户消息，模型可能误以为用户刚发送了表情包；若需要保留以便用户纯文字追问“刚才的表情”，可关闭此项。",
+    "hint": "每次请求都把 meme_manager 等插件注入的 <recent_sent_meme> 文本块改写为 <bot_sent_meme> 归属标记，明确表情包是机器人（assistant）自己发送的、用户没有发送，同时保留画面描述以便用户纯文字追问“刚才的表情”时模型能识别。关闭后回退为旧行为：直接剔除该文本块。",
     "default": true,
+    "invisible": true
+  },
+  "strip_recent_self_meme_context": {
+    "description": "（兼容旧配置）剔除上一轮自发表情包描述注入",
+    "type": "bool",
+    "hint": "仅在 mark_recent_self_meme_context 关闭时生效：移除 meme_manager 等插件注入的 <recent_sent_meme> 文本块。",
+    "default": false,
     "invisible": true
   },
   "guard_own_media_attribution": {

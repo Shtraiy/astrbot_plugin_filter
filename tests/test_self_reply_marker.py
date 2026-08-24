@@ -13,6 +13,7 @@ from _astrbot_plugin_filter_test.self_reply_marker import (
     has_user_media,
     mark_current_prompt_media_boundary,
     mark_context_media_ownership,
+    mark_recent_self_meme_context,
     strip_recent_self_meme_context,
 )
 
@@ -157,6 +158,71 @@ def test_strip_recent_self_meme_context():
 
     assert strip_recent_self_meme_context(req) == 1
     assert req.extra_user_content_parts == []
+
+
+def test_mark_recent_self_meme_context_rewrites_to_bot_owned_mark():
+    part = SimpleNamespace(
+        text=(
+            "<recent_sent_meme>\n"
+            "本插件刚刚在上一轮向当前会话发送了下面这张表情包。若用户提到“刚才的表情”……\n"
+            "文件：meme_47aa9ce73659.jpg\n"
+            "分类：吐槽\n"
+            "画面描述：银发动漫少女满脸通红、神情羞恼地大声斥责。\n"
+            "情绪：羞恼\n"
+            "图片文字：真是H!\n"
+            "标签：吐槽, 真是H\n"
+            "</recent_sent_meme>"
+        )
+    )
+    req = SimpleNamespace(extra_user_content_parts=[part])
+
+    assert mark_recent_self_meme_context(req) == 1
+    assert "<bot_sent_meme>" in part.text
+    assert "机器人（assistant，也就是你自己）刚刚在上一轮发送的" in part.text
+    assert "用户本轮没有发送这张表情包" in part.text
+    assert "文件：meme_47aa9ce73659.jpg" in part.text
+    assert "图片文字：真是H!" in part.text
+    assert "<recent_sent_meme>" not in part.text
+
+
+def test_mark_recent_self_meme_context_is_idempotent():
+    part = SimpleNamespace(
+        text=(
+            "<recent_sent_meme>\n"
+            "文件：a.png\n"
+            "图片文字：哈哈\n"
+            "</recent_sent_meme>"
+        )
+    )
+    req = SimpleNamespace(extra_user_content_parts=[part])
+
+    assert mark_recent_self_meme_context(req) == 1
+    assert mark_recent_self_meme_context(req) == 0
+    assert "<bot_sent_meme>" in part.text
+
+
+def test_mark_recent_self_meme_context_handles_dict_parts():
+    req = SimpleNamespace(
+        extra_user_content_parts=[
+            {
+                "type": "text",
+                "text": "<recent_sent_meme>\n文件：b.png\n</recent_sent_meme>",
+            }
+        ]
+    )
+
+    assert mark_recent_self_meme_context(req) == 1
+    part = req.extra_user_content_parts[0]
+    assert "<bot_sent_meme>" in part["text"]
+    assert "文件：b.png" in part["text"]
+
+
+def test_mark_recent_self_meme_context_keeps_normal_parts():
+    part = SimpleNamespace(text="普通内容")
+    req = SimpleNamespace(extra_user_content_parts=[part])
+
+    assert mark_recent_self_meme_context(req) == 0
+    assert req.extra_user_content_parts == [part]
 
 
 def test_strip_recent_self_meme_context_keeps_normal_parts():
@@ -346,6 +412,53 @@ def test_mark_context_media_ownership_annotates_object_parts():
     marked = mark_context_media_ownership(req)
 
     assert marked == 1
+    assert assistant_part.text.startswith("[机器人自己发送]")
+
+
+def test_mark_context_media_ownership_annotates_object_media_without_text():
+    """ImageURLPart-style objects (no .text) must still get an ownership mark."""
+    assistant_part = SimpleNamespace(type="image_url", image_url={"url": "x.png"})
+    user_part = SimpleNamespace(type="image_url", url="http://y.png")
+    req = SimpleNamespace(
+        contexts=[
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "看"}, assistant_part],
+            },
+            {"role": "user", "content": [user_part]},
+        ]
+    )
+
+    marked = mark_context_media_ownership(req)
+
+    assert marked == 2
+    assert assistant_part.text.startswith("[机器人自己发送]")
+    assert "x.png" in assistant_part.text
+    assert user_part.text.startswith("[用户发送]")
+    assert "y.png" in user_part.text
+
+
+def test_mark_context_media_ownership_annotates_string_list_items():
+    req = SimpleNamespace(
+        contexts=[
+            {"role": "assistant", "content": ["先说一句", "[图片]"]},
+            {"role": "user", "content": ["[图片]", "这是用户的"]},
+        ]
+    )
+
+    assert mark_context_media_ownership(req) == 2
+    assert req.contexts[0]["content"][1] == "[机器人自己发送的图片]"
+    assert req.contexts[1]["content"][0] == "[用户发送的图片]"
+
+
+def test_mark_context_media_ownership_object_annotation_is_idempotent():
+    assistant_part = SimpleNamespace(type="image", url="x.png")
+    req = SimpleNamespace(
+        contexts=[{"role": "assistant", "content": [assistant_part]}]
+    )
+
+    assert mark_context_media_ownership(req) == 1
+    assert mark_context_media_ownership(req) == 0
     assert assistant_part.text.startswith("[机器人自己发送]")
 
 

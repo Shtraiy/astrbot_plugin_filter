@@ -85,6 +85,17 @@ def test_is_media_part_detects_url_attribute_and_text_marker():
     assert is_media_part(SimpleNamespace(text="[Image] something")) is True
 
 
+def test_is_media_part_detects_image_url_attribute():
+    assert (
+        is_media_part(
+            SimpleNamespace(type="image_url", image_url={"url": "http://x"})
+        )
+        is True
+    )
+    assert is_media_part(SimpleNamespace(image_url="")) is False
+    assert is_media_part(SimpleNamespace(audio_url={"url": "http://a"})) is True
+
+
 def test_is_image_or_file_is_narrow():
     assert is_image_or_file(Image(url="x")) is True
     assert is_image_or_file(File(name="x")) is True

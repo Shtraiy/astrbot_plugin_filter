@@ -78,7 +78,9 @@ class ConfigSchemaTests(unittest.TestCase):
         schema = self._schema()
         self.assertEqual(schema["enable_self_reply_mark"]["default"], True)
         self.assertEqual(schema["self_reply_mark_minutes"]["default"], 5.0)
-        self.assertEqual(schema["strip_recent_self_meme_context"]["default"], True)
+        self.assertEqual(
+            schema["mark_recent_self_meme_context"]["default"], True
+        )
         self.assertEqual(schema["guard_own_media_attribution"]["default"], True)
 
     def test_task_execution_guard_defaults(self):

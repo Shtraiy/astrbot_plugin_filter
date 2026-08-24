@@ -52,6 +52,23 @@ _REFERENCED_IMAGE_NOTE = (
     "但不要声称用户刚刚发送了它。"
     "</referenced_image_note>"
 )
+_BOT_MEME_MARK_HEADER = (
+    "<bot_sent_meme>"
+    "注意：下面这张表情包是机器人（assistant，也就是你自己）刚刚在上一轮发送的，"
+    "不是用户发送的，用户本轮没有发送这张表情包。"
+    "若用户提到'刚才的表情'、'这个表情'、'这张图'或表情包上的配字，"
+    "指的就是你自己发送的这张表情包，回答时应明确说明'这是我（机器人）自己发送的表情包'；"
+    "禁止把它的画面/配字当作对用户表情、眼神或行为的描述。"
+    "以下内容供你识别这张表情包："
+)
+_BOT_MEME_FIELD_KEYWORDS = (
+    "文件：",
+    "分类：",
+    "画面描述：",
+    "情绪：",
+    "图片文字：",
+    "标签：",
+)
 _SENDER_ASSISTANT = "机器人自己发送的"
 _SENDER_USER = "用户发送的"
 _SENDER_USER_CURRENT = "用户本轮发送的"
@@ -416,8 +433,13 @@ def _annotate_media_blocks(
     """Prefix media blocks inside a message content structure. Returns True if changed."""
     changed = False
     if isinstance(content, list):
-        for item in content:
-            if _annotate_media_block(item, part_prefix, placeholder_sender):
+        for index, item in enumerate(content):
+            if isinstance(item, str):
+                replaced = _annotate_placeholder_text(item, placeholder_sender)
+                if replaced != item:
+                    content[index] = replaced
+                    changed = True
+            elif _annotate_media_block(item, part_prefix, placeholder_sender):
                 changed = True
     elif isinstance(content, Mapping):
         if is_media_part(content):
@@ -446,6 +468,9 @@ def _annotate_media_block(
     part_prefix: str,
     placeholder_sender: str,
 ) -> bool:
+    if isinstance(item, str):
+        replaced = _annotate_placeholder_text(item, placeholder_sender)
+        return replaced != item
     if isinstance(item, Mapping):
         if is_media_part(item):
             return _prefix_media_mapping(item, part_prefix)
@@ -465,17 +490,21 @@ def _annotate_media_block(
                 item["text"] = replaced
                 return True
         return False
-    text = str(getattr(item, "text", "") or "").strip()
-    if not text:
-        return False
     if is_media_part(item):
+        text = str(getattr(item, "text", "") or "").strip()
         if text.startswith(part_prefix):
             return False
         try:
-            item.text = f"{part_prefix} {text}".strip()
+            if text:
+                item.text = f"{part_prefix} {text}".strip()
+            else:
+                item.text = f"{part_prefix} {_object_media_label(item)}".strip()
             return True
         except Exception:
             return False
+    text = str(getattr(item, "text", "") or "").strip()
+    if not text:
+        return False
     replaced = _annotate_placeholder_text(text, placeholder_sender)
     if replaced == text:
         return False
@@ -494,10 +523,63 @@ def _prefix_media_mapping(item: Mapping, prefix: str) -> bool:
                 item[key] = f"{prefix} {original}"
                 return True
             return False
-    if "type" in item:
-        item["text"] = f"{prefix} {item['type']}"
-        return True
-    return False
+    item["text"] = f"{prefix} {_mapping_media_label(item)}".strip()
+    return True
+
+
+def _object_media_label(item: Any) -> str:
+    """Build a short ``[图片] 文件名`` style label for a media object part."""
+    for attr in ("name", "file", "path"):
+        value = getattr(item, attr, None)
+        if isinstance(value, str) and value.strip():
+            return _media_label_from_ref(value.strip())
+    image_url = getattr(item, "image_url", None)
+    if isinstance(image_url, Mapping):
+        url = image_url.get("url")
+    elif isinstance(image_url, str):
+        url = image_url
+    else:
+        url = getattr(image_url, "url", None)
+    if isinstance(url, str) and url.strip():
+        return _media_label_from_ref(url.strip())
+    url = getattr(item, "url", None)
+    if isinstance(url, str) and url.strip():
+        return _media_label_from_ref(url.strip())
+    return "[图片]"
+
+
+def _mapping_media_label(item: Mapping) -> str:
+    """Build a short label for a dict media part (``image_url``/``audio_url``...)."""
+    for key in ("image_url", "audio_url", "file", "url"):
+        value = item.get(key)
+        if isinstance(value, Mapping):
+            url = value.get("url")
+            if isinstance(url, str) and url.strip():
+                return _media_label_from_ref(url.strip())
+        elif isinstance(value, str) and value.strip():
+            return _media_label_from_ref(value.strip())
+    kind = str(item.get("type", "") or "")
+    if "image" in kind:
+        return "[图片]"
+    if "audio" in kind or "record" in kind:
+        return "[音频]"
+    if "video" in kind:
+        return "[视频]"
+    if "file" in kind:
+        return "[文件]"
+    return f"[{kind or '媒体'}]"
+
+
+def _media_label_from_ref(ref: str) -> str:
+    """Return ``[图片] 文件名`` for a URL/path reference (kept short)."""
+    if ref.startswith("data:"):
+        return "[图片]"
+    basename = ref.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if not basename:
+        return "[图片]"
+    if len(basename) > 80:
+        basename = basename[:80]
+    return f"[图片] {basename}"
 
 
 def strip_recent_self_meme_context(req: Any) -> int:
@@ -513,6 +595,72 @@ def strip_recent_self_meme_context(req: Any) -> int:
     if removed:
         parts[:] = kept
     return removed
+
+
+def mark_recent_self_meme_context(req: Any) -> int:
+    """Rewrite meme_manager <recent_sent_meme> parts into explicit bot-owned marks.
+
+    The original block is appended to the user message by the meme plugin and
+    only says "本插件刚刚发送", which lets the model think the user just sent a
+    sticker. This keeps the block in context (so "刚才那张图" follow-ups still
+    work) but rewrites it into ``<bot_sent_meme>`` stating the assistant itself
+    sent the image and the user did not. Returns the number of rewritten parts.
+    """
+    parts = getattr(req, "extra_user_content_parts", None)
+    if not isinstance(parts, list):
+        return 0
+    marked = 0
+    for part in parts:
+        text = _part_text(part)
+        if "<recent_sent_meme>" not in text or "<bot_sent_meme>" in text:
+            continue
+        prefix, body, tail = _split_meme_block(text)
+        new_text = (
+            f"{prefix}{_BOT_MEME_MARK_HEADER}\n{body}\n</bot_sent_meme>{tail}"
+        )
+        if _set_part_text(part, new_text):
+            marked += 1
+    return marked
+
+
+def _part_text(part: Any) -> str:
+    if isinstance(part, Mapping):
+        value = part.get("text", part.get("content", ""))
+    else:
+        value = getattr(part, "text", None)
+    return str(value or "").strip()
+
+
+def _set_part_text(part: Any, text: str) -> bool:
+    if isinstance(part, Mapping):
+        if "text" in part:
+            part["text"] = text
+            return True
+        if "content" in part:
+            part["content"] = text
+            return True
+        return False
+    try:
+        part.text = text
+        return True
+    except Exception:
+        return False
+
+
+def _split_meme_block(text: str) -> tuple[str, str, str]:
+    """Split a <recent_sent_meme> part into (prefix, field-body, tail)."""
+    start = text.find("<recent_sent_meme>")
+    end = text.find("</recent_sent_meme>")
+    if start == -1 or end == -1 or end <= start:
+        return "", text.strip(), ""
+    body = text[start + len("<recent_sent_meme>") : end]
+    lines = [
+        line.strip()
+        for line in body.splitlines()
+        if any(keyword in line for keyword in _BOT_MEME_FIELD_KEYWORDS)
+    ]
+    body_text = "\n".join(lines).strip() or "（无描述）"
+    return text[:start].strip(), body_text, text[end + len("</recent_sent_meme>") :]
 
 
 def append_text_only_media_note(req: Any) -> bool:
@@ -630,5 +778,6 @@ __all__ = [
     "has_user_media",
     "mark_current_prompt_media_boundary",
     "mark_context_media_ownership",
+    "mark_recent_self_meme_context",
     "strip_recent_self_meme_context",
 ]
