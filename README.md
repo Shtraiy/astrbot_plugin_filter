@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.29-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.30-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -34,6 +34,7 @@
 - 校正声明在 livingmemory 等下游注入记忆之后生效（`on_llm_request` 后置钩子），避免被记忆"用户发过图"的错误总结盖过。
 - livingmemory 记忆文本里的媒体/表情归属误判会**就地纠偏**：记忆若声称"用户发送了表情包""用户用眼神/表情/神态看着你"等（很可能是把机器人自己发送的表情包画面写成了用户行为），会在这些短语处直接追加纠偏标注，防止末尾提示被整段记忆盖过（仅当前请求，不写回记忆）。
 - 纠偏覆盖"用户/对方"两类表述，并在命中时于记忆块顶部插入 `<memory_attribution_note>` 块级声明：这段记忆是长期记忆插件对历史消息的总结，可能没严格区分发送者，涉及表情/眼神/神态与"发送表情包"的描述很可能源自机器人自己发送的表情包，除非有独立证据否则不要当作用户真实行为。
+- 机器人**自己历史回复文本里的错误断言**也会被就地纠正：assistant 历史若写过"用这种眼神看着我""表情包里的小人眼神"等表述，会在短语处追加"这是机器人自己发送的表情包画面，不是用户真实的表情/眼神"，防止它被自己以前的话反复带偏。
 - 保留 meme_manager 等插件拼进用户消息的 `<recent_sent_meme>` 描述并改写成 `<bot_sent_meme>` 归属标记，明确"这张表情包是机器人（assistant）自己发送的、用户没有发送"，同时保留画面描述供用户追问"刚才那张图"时识别。
 - 用户消息注入媒体归属提示：有图时注入 `<user_media_note>`（当前附件是用户的、历史 assistant 图片是机器人自己的）、引用历史图片时注入 `<referenced_image_note>`（被引用图是询问对象）并**兜底把引用链里的图片附加进请求**（补 AstrBot 引用图提取失败的缺口）、纯文字无图时注入 `<media_note>`。
 - 群聊内容防护：词库拦截 + 诱导绕过检测 + 新群聊严格模式。
@@ -133,6 +134,11 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.30
+
+- **增强**：补上上下文混淆的最后一条直接泄漏链——机器人自己历史回复里的错误断言。此前标记只覆盖媒体（`[机器人自己发送]`）与 livingmemory 记忆；现在 `req.contexts` 中 assistant 历史消息若含"这种眼神/那种表情/表情包里的小人眼神"等表述，会就地追加"（这是机器人自己发送的表情包画面，不是用户真实的表情/眼神）"，让模型不再被自己以前说过的"干嘛用这种眼神看着我"这类话反复自我证实。仅改当前请求副本，不写回历史。
+- **配置**：新增 `annotate_assistant_expression_claims`（默认 true，隐藏项）。
 
 ### v3.0.29
 

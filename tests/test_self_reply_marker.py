@@ -5,6 +5,7 @@ from astrbot.api.message_components import File, Image, Plain
 
 from _astrbot_plugin_filter_test.self_reply_marker import (
     SelfReplyMarker,
+    annotate_assistant_expression_claims,
     annotate_memory_media_attribution,
     append_referenced_image_note,
     append_text_only_media_note,
@@ -311,6 +312,64 @@ def test_memory_attribution_fix_disclaimer_is_idempotent_with_duifang():
     assert annotate_memory_media_attribution(req) == 2
     assert annotate_memory_media_attribution(req) == 0
     assert part.text.count("<memory_attribution_note>") == 1
+
+
+def test_assistant_expression_claims_annotate_assistant_history_text():
+    req = SimpleNamespace(
+        contexts=[
+            {
+                "role": "assistant",
+                "content": "不信就不信嘛，干嘛用这种眼神看着我……",
+            },
+        ]
+    )
+
+    assert annotate_assistant_expression_claims(req) == 1
+    assert "这种眼神（这是机器人自己发送的表情包画面" in req.contexts[0]["content"]
+
+
+def test_assistant_expression_claims_cover_meme_eye_phrases_in_parts():
+    req = SimpleNamespace(
+        contexts=[
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "就……刚才发的那张表情包里的小人眼神啊。"},
+                ],
+            },
+        ]
+    )
+
+    assert annotate_assistant_expression_claims(req) == 1
+    part = req.contexts[0]["content"][0]
+    assert "表情包里的小人眼神（这是机器人自己发送的表情包画面" in part["text"]
+
+
+def test_assistant_expression_claims_skip_user_and_system_messages():
+    req = SimpleNamespace(
+        contexts=[
+            {"role": "user", "content": "我用什么眼神看你了？？？"},
+            {"role": "system", "content": "不要用这种眼神描述用户。"},
+            {"role": "assistant", "content": "普通回复，没有表情。"},
+        ]
+    )
+
+    assert annotate_assistant_expression_claims(req) == 0
+    assert req.contexts[0]["content"] == "我用什么眼神看你了？？？"
+    assert req.contexts[1]["content"] == "不要用这种眼神描述用户。"
+    assert req.contexts[2]["content"] == "普通回复，没有表情。"
+
+
+def test_assistant_expression_claims_is_idempotent():
+    req = SimpleNamespace(
+        contexts=[
+            {"role": "assistant", "content": "干嘛用那种表情看着我"},
+        ]
+    )
+
+    assert annotate_assistant_expression_claims(req) == 1
+    assert annotate_assistant_expression_claims(req) == 0
+    assert req.contexts[0]["content"].count("（这是机器人自己发送的表情包画面") == 1
 
 
 def test_strip_recent_self_meme_context_keeps_normal_parts():

@@ -84,6 +84,9 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(
             schema["fix_memory_media_attribution"]["default"], True
         )
+        self.assertEqual(
+            schema["annotate_assistant_expression_claims"]["default"], True
+        )
         self.assertEqual(schema["guard_own_media_attribution"]["default"], True)
 
     def test_task_execution_guard_defaults(self):

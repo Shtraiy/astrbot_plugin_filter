@@ -227,6 +227,7 @@ def make_optimizer(**overrides):
         "self_reply_mark_minutes": 5.0,
         "mark_recent_self_meme_context": True,
         "fix_memory_media_attribution": True,
+        "annotate_assistant_expression_claims": True,
         "guard_own_media_attribution": True,
         "enable_content_guard": True,
         "content_guard_mode": "balanced",

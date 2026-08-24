@@ -84,6 +84,13 @@ _MEMORY_ROLE_DISCLAIMER = (
     "不要把这些内容当作用户的真实行为。"
     "</memory_attribution_note>"
 )
+_ASSISTANT_CLAIM_MARK = (
+    "（这是机器人自己发送的表情包画面，不是用户真实的表情/眼神）"
+)
+_ASSISTANT_CLAIM_FIXES = [
+    re.compile(r"(?:这种|那种|这副|那副)(?:眼神|表情|神态)(?!（这是)"),
+    re.compile(r"表情包里(?:的)?小人?(?:的)?(?:眼神|表情|神态)(?!（这是)"),
+]
 _MISATTRIBUTION_FIXES = [
     (
         re.compile(
@@ -743,6 +750,62 @@ def annotate_memory_media_attribution(req: Any) -> int:
     return fixed
 
 
+def annotate_assistant_expression_claims(req: Any) -> int:
+    """In-place fix of the bot's own historical expression/eye claims.
+
+    The bot's past replies can assert the user made an expression that actually
+    came from a meme the bot itself sent ("干嘛用这种眼神看着我"). That text is
+    stored as assistant history and keeps "self-confirming" the confusion in
+    every later request. This annotates such phrases in place (request copy
+    only, never persisted). Returns the number of phrases fixed.
+    """
+    contexts = request_contexts(req)
+    if not contexts:
+        return 0
+    fixed = 0
+    for entry in contexts:
+        role = str(entry_role(entry) or "").casefold()
+        if role not in {"assistant", "bot", "ai"}:
+            continue
+        content = entry_content(entry)
+        if isinstance(content, str):
+            rewritten, part_fixed = _fix_assistant_claim_text(content)
+            if part_fixed and _set_entry_content(entry, rewritten):
+                fixed += part_fixed
+            continue
+        if not isinstance(content, list):
+            continue
+        for index, part in enumerate(content):
+            if isinstance(part, str):
+                rewritten, part_fixed = _fix_assistant_claim_text(part)
+                if part_fixed:
+                    content[index] = rewritten
+                    fixed += part_fixed
+            elif isinstance(part, Mapping):
+                for key in ("text", "content"):
+                    value = part.get(key)
+                    if not isinstance(value, str):
+                        continue
+                    rewritten, part_fixed = _fix_assistant_claim_text(value)
+                    if part_fixed:
+                        part[key] = rewritten
+                        fixed += part_fixed
+    return fixed
+
+
+def _fix_assistant_claim_text(text: str) -> tuple[str, int]:
+    fixed = 0
+
+    def _repl(match: re.Match) -> str:
+        nonlocal fixed
+        fixed += 1
+        return match.group(0) + _ASSISTANT_CLAIM_MARK
+
+    for pattern in _ASSISTANT_CLAIM_FIXES:
+        text = pattern.sub(_repl, text)
+    return text, fixed
+
+
 def _prepend_memory_role_disclaimer(text: str) -> str:
     """Insert a block-level role disclaimer at the top of the memory part."""
     for marker in ("<RAG-Faiss-Memory>", "<memory_block>", "<memory>"):
@@ -890,6 +953,7 @@ def _make_text_part(text: str) -> Any | None:
 __all__ = [
     "MAX_MARK_ENTRIES",
     "SelfReplyMarker",
+    "annotate_assistant_expression_claims",
     "annotate_memory_media_attribution",
     "append_text_only_media_note",
     "append_referenced_image_note",

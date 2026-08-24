@@ -88,6 +88,13 @@
     "default": true,
     "invisible": true
   },
+  "annotate_assistant_expression_claims": {
+    "description": "就地标注历史中机器人对用户表情/眼神的错误表述",
+    "type": "bool",
+    "hint": "机器人历史回复若写过“用这种眼神看着我”“表情包里的小人眼神”等表述，会作为 assistant 历史反复自我证实、导致上下文混淆；开启后会在这些短语处就地追加“这是机器人自己发送的表情包画面，不是用户真实的表情/眼神”标注（仅当前请求，不写回历史）。",
+    "default": true,
+    "invisible": true
+  },
   "strip_recent_self_meme_context": {
     "description": "（兼容旧配置）剔除上一轮自发表情包描述注入",
     "type": "bool",

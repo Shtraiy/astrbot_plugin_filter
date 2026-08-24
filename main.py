@@ -30,6 +30,7 @@ from .onboarding_guard import OnboardingGuard
 from .reply_coordinator import ReplyCoordinator
 from .self_reply_marker import (
     SelfReplyMarker,
+    annotate_assistant_expression_claims,
     annotate_memory_media_attribution,
     append_referenced_image_note,
     append_text_only_media_note,
@@ -325,6 +326,13 @@ class LanguageLogicOptimizer(Star):
                     logger.info(
                         "[自回复标记] 已就地纠偏记忆中的媒体/表情归属误判 %d 处",
                         fixed,
+                    )
+            if self._get_config("annotate_assistant_expression_claims", True):
+                claims_fixed = annotate_assistant_expression_claims(req)
+                if claims_fixed:
+                    logger.info(
+                        "[自回复标记] 已就地标注历史中机器人对用户表情/眼神的表述 %d 处",
+                        claims_fixed,
                     )
             marker = self._get_self_reply_marker()
             if self._get_config("enable_self_reply_mark", True):
