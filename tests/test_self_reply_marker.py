@@ -44,6 +44,7 @@ def test_record_and_mark_recent_reply():
     assert "meme.png" in text
     assert "好的" in text
     assert "不能假定用户本轮又发了同一张" in text
+    assert "禁止用机器人自己发送的表情包" in text
 
 
 def test_record_ignores_empty_replies():
@@ -171,6 +172,8 @@ def test_append_text_only_media_note():
 
     assert append_text_only_media_note(req) is True
     assert "用户本轮没有发送任何图片" in req.extra_user_content_parts[0].text
+    assert "不要虚构或推断用户的表情" in req.extra_user_content_parts[0].text
+    assert "这是我（机器人）自己发送的表情包" in req.extra_user_content_parts[0].text
 
 
 def test_has_user_media_detects_media_components():

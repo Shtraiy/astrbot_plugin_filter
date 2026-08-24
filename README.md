@@ -2,7 +2,7 @@
 
 # AstrBot 消息合并大师
 
-[![version](https://img.shields.io/badge/version-v3.0.24-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
+[![version](https://img.shields.io/badge/version-v3.0.25-blue.svg)](https://github.com/Shtraiy/astrbot_plugin_filter)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16-orange.svg)](https://github.com/Soulter/AstrBot)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](./LICENSE)
 
@@ -131,6 +131,10 @@ AstrBot 4.27 的发送管道可能在装饰/发送阶段被重复触发（其 re
 AstrBot 4.16 无法真正取消已在运行的请求，旧请求会跑完、新请求需要等会话锁释放。升级到 AstrBot 4.25+ 并开启"合并时取消旧 pipeline 任务"后可真正取消。
 
 ## 更新日志
+
+### v3.0.25
+
+- **修复**：纯文字轮次仍会把机器人自己发送的表情包当成用户的表情/眼神——日志场景为：用户只发“我不信你/你骗我”，模型虚构出“干嘛用这种眼神看着我”，随后又用机器人自己发的表情包回答“刚才那张表情包里的小人眼神啊”，把机器人自己的图归到了用户身上。现在 `<media_note>` 明确禁止虚构或推断用户的表情/眼神/神态，并规定用户提及“刚才那张图/表情”时必须说清“这是我（机器人）自己发送的表情包”；`<self_reply_mark>` 同步增加“纯文字轮次禁止用机器人自己发送的表情包描述用户表情、历史中关于用户表情的推测可能是误判”的约束。
 
 ### v3.0.24
 
