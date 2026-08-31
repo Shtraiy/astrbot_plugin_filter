@@ -236,6 +236,7 @@ def make_optimizer(**overrides):
         "segment_min_chars": 80,
         "segment_mechanical_min_chars": 20,
         "segment_max_messages": 3,
+        "segment_split_chars": "。！？!?；;～~",
         "segment_strip_chars": "。～~",
         "segment_timeout_seconds": 10.0,
         "segment_delay_min": 0.8,

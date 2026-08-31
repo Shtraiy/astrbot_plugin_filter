@@ -20,7 +20,13 @@ SEGMENT_PROMPT = (
 )
 
 _FENCE_RE = re.compile(r"```")
-_SENT_BOUNDARY_RE = re.compile(r"(?<=[。！？!?；;～~])(?=\S)")
+_DEFAULT_SPLIT_CHARS = "。！？!?；;～~"
+_DEFAULT_STRIP_CHARS = "。～~"
+
+
+def _boundary_re(split_chars: str) -> re.Pattern:
+    """Build a zero-width sentence-boundary regex for the given characters."""
+    return re.compile(r"(?<=[" + re.escape(split_chars) + r"])(?=\S)")
 
 
 def _compact(text: str) -> str:
@@ -138,7 +144,11 @@ def strip_segment_delimiters(
     return cleaned
 
 
-def rule_split(text: str, max_messages: int) -> list[str]:
+def rule_split(
+    text: str,
+    max_messages: int,
+    split_chars: str = _DEFAULT_SPLIT_CHARS,
+) -> list[str]:
     """Split on blank lines / sentence boundaries, capped at max_messages."""
     text = (text or "").strip()
     if not text:
@@ -146,8 +156,9 @@ def rule_split(text: str, max_messages: int) -> list[str]:
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     if len(paragraphs) < 2:
         # 零宽断句：不吞标点后的换行/空格，保证各段拼接后与原文一致
-        sentences = [s for s in _SENT_BOUNDARY_RE.split(text) if s.strip()]
-        paragraphs = sentences or [text]
+        if split_chars:
+            sentences = [s for s in _boundary_re(split_chars).split(text) if s.strip()]
+            paragraphs = sentences or [text]
     paragraphs = _protect_fences(paragraphs)
     return _cap_parts(paragraphs, max_messages)
 
@@ -166,6 +177,10 @@ def _get_mechanical_min_chars(get_config: Callable[[str, Any], Any]) -> int:
     except (TypeError, ValueError):
         return 20
     return max(1, min(value, 1000))
+
+
+def _get_split_chars(get_config: Callable[[str, Any], Any]) -> str:
+    return str(get_config("segment_split_chars", _DEFAULT_SPLIT_CHARS) or "")
 
 
 def _get_max_messages(get_config: Callable[[str, Any], Any]) -> int:
@@ -268,9 +283,13 @@ async def split_reply(
     else:
         logger.warning("[智能分段] 未配置 segment_provider_id，仅使用规则分段")
     if segments is None:
-        segments = _protect_fences(rule_split(text, max_messages))
+        segments = _protect_fences(
+            rule_split(text, max_messages, _get_split_chars(get_config))
+        )
         segments = _cap_parts(segments, max_messages)
-        strip_chars = str(get_config("segment_strip_chars", "。～~") or "")
+        strip_chars = str(
+            get_config("segment_strip_chars", _DEFAULT_STRIP_CHARS) or ""
+        )
         if strip_chars:
             segments = strip_segment_delimiters(segments, strip_chars)
     if len(segments) < 2:

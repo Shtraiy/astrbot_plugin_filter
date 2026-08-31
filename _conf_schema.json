@@ -71,6 +71,12 @@
     "hint": "未达 LLM 分段阈值、未配置 provider 或 LLM 分段失败时，达到该字数的回复仍按句号/波浪号等机械分段并清理分隔符；短于此直接一条发送。",
     "default": 20
   },
+  "segment_split_chars": {
+    "description": "机械分段的分隔词",
+    "type": "string",
+    "hint": "机械分段时在这些字符后面断句，逐个字符生效（默认 。！？!?；;～~）；留空则只按空行分段。",
+    "default": "。！？!?；;～~"
+  },
   "segment_max_messages": {
     "description": "最大分段数",
     "type": "int",
@@ -78,7 +84,7 @@
     "default": 3
   },
   "segment_strip_chars": {
-    "description": "机械分段时删除的分隔符",
+    "description": "分段后删除的分隔词",
     "type": "string",
     "hint": "未配置 provider 或 LLM 分段失败、走机械分段时，从每条分段末尾删除这些字符（如句号、波浪号），让聊天更自然；留空则不删除。注意：默认不含 ！？，它们承载语气，删除会改变语义。",
     "default": "。～~"

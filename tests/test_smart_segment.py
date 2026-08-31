@@ -56,6 +56,25 @@ def test_rule_split_caps_and_preserves_content():
     )
 
 
+def test_rule_split_custom_split_chars():
+    text = "第一句，第二句，第三句"
+    parts = rule_split(text, 3, split_chars="，")
+    assert parts == ["第一句，", "第二句，", "第三句"]
+    assert "".join(parts) == text
+
+
+def test_rule_split_empty_split_chars_no_sentence_split():
+    text = "第一句。第二句！第三句"
+    parts = rule_split(text, 3, split_chars="")
+    assert parts == [text]
+
+
+def test_rule_split_escapes_special_split_chars():
+    text = "第一句.第二句.第三句"
+    parts = rule_split(text, 3, split_chars=".")
+    assert parts == ["第一句.", "第二句.", "第三句"]
+
+
 def test_split_reply_skips_short_text():
     context = SimpleNamespace()
     assert asyncio.run(split_reply("太短", context, lambda k, d: d)) is None
@@ -262,6 +281,29 @@ def test_mechanical_fallback_strip_disabled_preserves_content():
 
     assert result is not None
     assert "".join(result) == text
+
+
+def test_split_reply_uses_configured_split_chars():
+    text = "这是第一句比较长的内容，这是第二句比较长的内容，这是第三句比较长的内容"
+    config = {
+        "segment_provider_id": "",
+        "segment_min_chars": 80,
+        "segment_mechanical_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+        "segment_split_chars": "，",
+        "segment_strip_chars": "，",
+    }
+
+    result = asyncio.run(
+        split_reply(text, SimpleNamespace(), lambda k, d: config.get(k, d))
+    )
+
+    assert result == [
+        "这是第一句比较长的内容",
+        "这是第二句比较长的内容",
+        "这是第三句比较长的内容",
+    ]
 
 
 def test_llm_path_not_stripped():

@@ -59,8 +59,9 @@
 | 分段 LLM provider | 空 | 下拉选择分段用 provider（在 AstrBot Provider 管理里创建）；留空仅规则分段 |
 | 分段最小字数（LLM） | 80 | 纯文本回复达到该字数才调用分段 provider 做语义分段（建议 60~200） |
 | 机械分段最小字数 | 20 | 低于 LLM 阈值 / 未配置 provider / LLM 失败时，达到该字数仍按句号、波浪号等机械分段 |
+| 机械分段的分隔词 | `。！？!?；;～~` | 机械分段时在这些字符后面断句，逐个字符生效；留空则只按空行分段 |
 | 最大分段数 | 3 | 回复最多拆成 N 条消息（2~5），超出合并到末段 |
-| 机械分段时删除的分隔符 | `。～~` | 未配置 provider / LLM 分段失败走机械回退时，删除每条分段末尾的这些字符；留空不删 |
+| 分段后删除的分隔词 | `。～~` | 机械分段后删除每条末尾的这些字符；留空不删 |
 | 启用 bot 自回复归属标记 | true | 注入 `<self_reply_mark>` 归属标记 |
 | 启用群聊内容防护 | true | 拦截词库命中与诱导绕过 |
 | 内容防护模式 | balanced | `balanced` 只拦截明确风险；`strict` 更积极 |
@@ -160,6 +161,7 @@ v3.1.0 起插件不再打断或重生成旧回复：旧回复正常发完，新�
 - **机械回退增强**：机械分段（`。！？~` 断句）后默认删除每条末尾的 `。～~` 分隔符（`segment_strip_chars` 可配，留空则不删），聊天观感更自然；LLM 分段路径保持零改动。
 - **阈值分层**：`segment_min_chars` 只作为 LLM 分段门槛；低于它但达到 `segment_mechanical_min_chars`（默认 20 字，新增可见配置）的回复仍走机械分段，不再整条发送。
 - **容错解析**：分段模型的 JSON 输出解析更宽容——支持 Markdown 代码块、前后解释文字、单引号数组与 `{"segments": [...]}` 包装，小模型不听话时也能正确取到分段，避免误回退机械分段。
+- **自定义分隔词**：新增可见配置"机械分段的分隔词"（`segment_split_chars`，默认 `。！？!?；;～~`），可手动指定机械分段在哪些字符后断句；"分段后删除的分隔词"（`segment_strip_chars`，默认 `。～~`）可配置分段后删除哪些末尾字符。
 - **配置**：新增 `enable_llm_segment`、`segment_provider_id`（`_special: select_provider` 下拉）、`segment_min_chars`、`segment_max_messages`（可见）与 `segment_timeout_seconds`、`segment_delay_min/max`（隐藏）；`merge_window_seconds` 转可见。
 
 ### v3.0.30
