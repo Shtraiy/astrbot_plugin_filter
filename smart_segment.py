@@ -125,9 +125,9 @@ def rule_split(text: str, max_messages: int) -> list[str]:
 
 def _get_min_chars(get_config: Callable[[str, Any], Any]) -> int:
     try:
-        value = int(get_config("segment_min_chars", 150))
+        value = int(get_config("segment_min_chars", 80))
     except (TypeError, ValueError):
-        return 150
+        return 80
     return max(20, min(value, 1000))
 
 
@@ -199,7 +199,9 @@ async def split_reply(
 ) -> list[str] | None:
     """Return 2..max segments, or None to send the reply as-is."""
     text = (text or "").strip()
-    if not text or len(text) < _get_min_chars(get_config):
+    min_chars = _get_min_chars(get_config)
+    if not text or len(text) < min_chars:
+        logger.debug("[智能分段] 回复长度 %d 未达最小分段字数 %d，单条发送", len(text), min_chars)
         return None
     max_messages = _get_max_messages(get_config)
     provider_id = str(get_config("segment_provider_id", "") or "").strip()

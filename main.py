@@ -16,7 +16,7 @@ from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
 from .content_guard import SAFE_REPLY, evaluate_input, parse_terms
-from .event_access import event_has_content
+from .event_access import event_has_content, is_reply_component
 from .interruption_guard import (
     is_interruption_placeholder_text,
     scrub_interruption_placeholders,
@@ -361,14 +361,18 @@ class LanguageLogicOptimizer(Star):
             logger.debug("[消息合并] 结果清理失败", exc_info=True)
 
     async def _maybe_segment_reply(self, event: AstrMessageEvent) -> None:
-        """Split a long plain-text reply via the configured segment provider."""
+        """Split a long plain-text reply via the configured segment provider.
+
+        Quote (reply) components are allowed and stay attached to the first
+        segment; media components still prevent segmentation.
+        """
         if not self._get_config("enable_llm_segment", False):
             return
         result = getattr(event, "get_result", lambda: None)()
         chain = getattr(result, "chain", None) if result is not None else None
         if not isinstance(chain, list) or not chain:
             return
-        if not all(isinstance(comp, Plain) for comp in chain):
+        if any(not _is_segmentable_component(comp) for comp in chain):
             return
         text = _result_plain_text(result)
         if not text:
@@ -380,7 +384,8 @@ class LanguageLogicOptimizer(Star):
             return
         if not segments or len(segments) < 2:
             return
-        chain[:] = [Plain(segments[0])]
+        head = [comp for comp in chain if not isinstance(comp, Plain)]
+        chain[:] = head + [Plain(segments[0])]
         try:
             event.set_extra("segment_followups", list(segments[1:]))
         except Exception:
@@ -515,6 +520,13 @@ def _stop_event(event) -> None:
             stopper()
         except Exception:
             logger.debug("[消息合并] 停止事件失败", exc_info=True)
+
+
+def _is_segmentable_component(comp) -> bool:
+    """Plain text or a quote component can survive segmentation."""
+    if isinstance(comp, Plain):
+        return True
+    return is_reply_component(comp)
 
 
 def _resp_is_interruption_placeholder(resp) -> bool:

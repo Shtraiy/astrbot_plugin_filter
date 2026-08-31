@@ -78,7 +78,7 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(schema["merge_max_chars"]["default"], 2000)
         self.assertEqual(schema["merge_ignore_prefixes"]["default"], "/,!")
         self.assertEqual(schema["merge_include_media"]["default"], True)
-        self.assertEqual(schema["segment_min_chars"]["default"], 150)
+        self.assertEqual(schema["segment_min_chars"]["default"], 80)
         self.assertEqual(schema["segment_max_messages"]["default"], 3)
         self.assertEqual(schema["segment_strip_chars"]["default"], "。～~")
         self.assertEqual(schema["segment_timeout_seconds"]["default"], 10.0)

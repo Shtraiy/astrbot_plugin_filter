@@ -483,6 +483,31 @@ def test_decoration_segments_long_text_reply():
     assert event.get_extra("segment_followups") == ["这里是第二段比较长的内容。"]
 
 
+def test_decoration_segments_reply_with_quote_component():
+    """带引用组件的回复也应参与分段，引用保留在第一条消息上。"""
+    text = "这是第一段比较长的内容。这里是第二段比较长的内容。"
+    quote = SimpleNamespace(type="Reply", chain=[Plain("旧消息")], message_str="旧消息")
+    optimizer = make_optimizer(
+        enable_llm_segment=True,
+        segment_provider_id="p1",
+        segment_min_chars=20,
+        segment_max_messages=3,
+    )
+    optimizer.context.llm_responses["p1"] = SimpleNamespace(
+        completion_text='["这是第一段比较长的内容。", "这里是第二段比较长的内容。"]'
+    )
+    result = SimpleNamespace(chain=[quote, Plain(text)])
+    event = FakeEvent("u1", "group:1", wake=True)
+    event.set_result(result)
+
+    asyncio.run(optimizer.on_decorating_result(event))
+
+    assert result.chain[0] is quote
+    assert result.chain[1].text == "这是第一段比较长的内容。"
+    assert len(result.chain) == 2
+    assert event.get_extra("segment_followups") == ["这里是第二段比较长的内容。"]
+
+
 def test_decoration_skips_segment_for_short_or_media_reply():
     optimizer = make_optimizer(
         enable_llm_segment=True,

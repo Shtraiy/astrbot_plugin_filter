@@ -233,7 +233,7 @@ def make_optimizer(**overrides):
         "enable_task_execution_guard": True,
         "enable_llm_segment": False,
         "segment_provider_id": "",
-        "segment_min_chars": 150,
+        "segment_min_chars": 80,
         "segment_max_messages": 3,
         "segment_strip_chars": "。～~",
         "segment_timeout_seconds": 10.0,
