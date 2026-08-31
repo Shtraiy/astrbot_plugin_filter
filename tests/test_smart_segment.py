@@ -202,8 +202,8 @@ def test_split_reply_without_provider_uses_rules():
     assert result == ["这是第一段比较长的内容", "这里是第二段比较长的内容"]
 
 
-def test_split_reply_respects_llm_single_segment_no_split():
-    """模型明确判断无需分段时保持单条发送，不被规则按标点切分（诗歌场景）。"""
+def test_split_reply_poem_single_message_when_llm_no_split():
+    """模型返回单段时交机械复核：换行连排的诗句无切分点，仍整条发送。"""
     text = "静夜思\n李白\n床前明月光，疑是地上霜。\n举头望明月，低头思故乡。"
     context = SimpleNamespace(
         llm_generate=async_stub(json.dumps([text], ensure_ascii=False))
@@ -218,6 +218,31 @@ def test_split_reply_respects_llm_single_segment_no_split():
     result = asyncio.run(split_reply(text, context, lambda k, d: config.get(k, d)))
 
     assert result is None
+
+
+def test_split_reply_llm_no_split_overridden_by_mechanical_boundaries():
+    """模型返回单段但有明确空行切分点（如两段式聊天回复）时，按机械分段。"""
+    text = (
+        "这是第一段比较长的内容，氛围感十足。\n\n"
+        "这是第二段比较长的内容，风格独特。"
+    )
+    context = SimpleNamespace(
+        llm_generate=async_stub(json.dumps([text], ensure_ascii=False))
+    )
+    config = {
+        "segment_provider_id": "p1",
+        "segment_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+        "segment_strip_chars": "。～~",
+    }
+
+    result = asyncio.run(split_reply(text, context, lambda k, d: config.get(k, d)))
+
+    assert result == [
+        "这是第一段比较长的内容，氛围感十足",
+        "这是第二段比较长的内容，风格独特",
+    ]
 
 
 def test_split_reply_llm_single_segment_with_rewrite_falls_back():

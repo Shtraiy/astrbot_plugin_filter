@@ -162,6 +162,7 @@ v3.1.0 起插件不再打断或重生成旧回复：旧回复正常发完，新�
 - **阈值分层**：`segment_min_chars` 只作为 LLM 分段门槛；低于它但达到 `segment_mechanical_min_chars`（默认 20 字，新增可见配置）的回复仍走机械分段，不再整条发送。
 - **容错解析**：分段模型的 JSON 输出解析更宽容——支持 Markdown 代码块、前后解释文字、单引号数组与 `{"segments": [...]}` 包装，小模型不听话时也能正确取到分段，避免误回退机械分段。
 - **自定义分隔词**：新增可见配置"机械分段的分隔词"（`segment_split_chars`，默认 `。！？!?；;～~`），可手动指定机械分段在哪些字符后断句；"分段后删除的分隔词"（`segment_strip_chars`，默认 `。～~`）可配置分段后删除哪些末尾字符。
+- **不分段判断不再一票否决**：模型返回单段（"不用拆"）时改由机械规则复核——存在明确切分点（空行 / 分隔词）的回复照常分段；换行连排、无切分点的文本（如诗歌）仍整条发送。
 - **配置**：新增 `enable_llm_segment`、`segment_provider_id`（`_special: select_provider` 下拉）、`segment_min_chars`、`segment_max_messages`（可见）与 `segment_timeout_seconds`、`segment_delay_min/max`（隐藏）；`merge_window_seconds` 转可见。
 
 ### v3.0.30

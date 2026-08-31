@@ -223,13 +223,10 @@ async def _try_llm_segment(
             logger.debug("[智能分段] LLM 原始输出: %s", (raw or "")[:200])
             return None
         if len(parts) == 1:
-            # 模型明确判断无需分段：内容与围栏校验通过则尊重其判断，
-            # 保持单条发送，避免规则回退按标点机械切分（如诗歌逐行断句）。
-            if _compact(parts[0]) == _compact(text) and _fences_balanced(parts[0]):
-                return parts
-            logger.warning(
-                "[智能分段] 模型单段结果改动了原文，回退规则分段"
-            )
+            # 模型认为无需分段：交给机械规则复核。零宽断句不会切碎
+            # 换行连排的诗句，因此诗歌仍整条发送；有明确切分点（空行/
+            # 分隔词）的文本则按机械分段，避免模型一票否决。
+            logger.debug("[智能分段] 模型返回单段，交由机械分段复核")
             return None
         if not validate_segments(text, parts, max_messages):
             logger.warning(
