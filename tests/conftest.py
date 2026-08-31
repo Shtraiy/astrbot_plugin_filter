@@ -148,9 +148,18 @@ from main import LanguageLogicOptimizer
 class FakeContext:
     def __init__(self):
         self.sent = []
+        self.llm_responses = {}
 
     async def send_message(self, origin, chain):
         self.sent.append((origin, chain))
+
+    async def llm_generate(self, *, chat_provider_id, prompt, **kwargs):
+        response = self.llm_responses.get(chat_provider_id)
+        if callable(response):
+            return await response(chat_provider_id, prompt)
+        if response is None:
+            return SimpleNamespace(completion_text="")
+        return response
 
 
 class FakeEvent:
@@ -222,8 +231,14 @@ def make_optimizer(**overrides):
         "merge_max_chars": 2000,
         "merge_ignore_prefixes": "/,!",
         "merge_include_media": True,
-        "merge_stop_remark_seconds": 1.5,
         "enable_task_execution_guard": True,
+        "enable_llm_segment": False,
+        "segment_provider_id": "",
+        "segment_min_chars": 150,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 10.0,
+        "segment_delay_min": 0.8,
+        "segment_delay_max": 2.0,
         "enable_self_reply_mark": True,
         "self_reply_mark_minutes": 5.0,
         "mark_recent_self_meme_context": True,
@@ -238,6 +253,7 @@ def make_optimizer(**overrides):
     }
     optimizer.config.update(overrides)
     optimizer.context = FakeContext()
+    optimizer._pending_segment_tasks = set()
     optimizer._onboarding_guard = None
     optimizer._message_merger = None
     optimizer._reply_coordinator = None

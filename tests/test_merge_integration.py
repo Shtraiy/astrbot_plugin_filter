@@ -460,3 +460,75 @@ def test_inflight_reply_gets_no_stop_on_new_message():
 
     assert old.stopped is False
     assert follow.message_str == "@bot 补充"  # 未被合并改写
+
+
+def test_decoration_segments_long_text_reply():
+    text = "这是第一段比较长的内容。这里是第二段比较长的内容。"
+    optimizer = make_optimizer(
+        enable_llm_segment=True,
+        segment_provider_id="p1",
+        segment_min_chars=20,
+        segment_max_messages=3,
+    )
+    optimizer.context.llm_responses["p1"] = SimpleNamespace(
+        completion_text='["这是第一段比较长的内容。", "这里是第二段比较长的内容。"]'
+    )
+    result = SimpleNamespace(chain=[Plain(text)])
+    event = FakeEvent("u1", "group:1", wake=True)
+    event.set_result(result)
+
+    asyncio.run(optimizer.on_decorating_result(event))
+
+    assert result.chain[0].text == "这是第一段比较长的内容。"
+    assert event.get_extra("segment_followups") == ["这里是第二段比较长的内容。"]
+
+
+def test_decoration_skips_segment_for_short_or_media_reply():
+    optimizer = make_optimizer(
+        enable_llm_segment=True,
+        segment_provider_id="p1",
+        segment_min_chars=100,
+    )
+    result = SimpleNamespace(chain=[Plain("短回复")])
+    event = FakeEvent("u1", "group:1", wake=True)
+    event.set_result(result)
+
+    asyncio.run(optimizer.on_decorating_result(event))
+
+    assert result.chain[0].text == "短回复"
+    assert event.get_extra("segment_followups") is None
+
+
+def test_decoration_skips_segment_when_disabled_or_media_chain():
+    optimizer = make_optimizer(
+        enable_llm_segment=True,
+        segment_provider_id="p1",
+        segment_min_chars=5,
+    )
+    media_result = SimpleNamespace(chain=[Plain("带图回复"), Image("file:///x.png")])
+    event = FakeEvent("u1", "group:1", wake=True)
+    event.set_result(media_result)
+
+    asyncio.run(optimizer.on_decorating_result(event))
+
+    assert [comp.text for comp in media_result.chain if isinstance(comp, Plain)] == [
+        "带图回复"
+    ]
+    assert event.get_extra("segment_followups") is None
+
+
+def test_after_message_sent_sends_segment_followups():
+    optimizer = make_optimizer(segment_delay_min=0.0, segment_delay_max=0.0)
+    event = FakeEvent("u1", "group:1", wake=True)
+    event.set_extra("segment_followups", ["第二段", "第三段"])
+    event.set_result(SimpleNamespace(chain=[Plain("第一段")]))
+
+    async def run():
+        await optimizer.after_message_sent(event)
+        await asyncio.sleep(0.05)
+        return optimizer.context.sent
+
+    sent = asyncio.run(run())
+
+    texts = [chain.chain[0].text for _, chain in sent]
+    assert texts == ["第二段", "第三段"]

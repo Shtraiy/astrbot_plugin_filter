@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import random
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -38,6 +39,7 @@ from .self_reply_marker import (
     mark_recent_self_meme_context,
     strip_recent_self_meme_context,
 )
+from .smart_segment import split_reply
 from .task_commitment_guard import inject_task_execution_instruction
 
 MEDIA_ONLY_PROMPT = "用户发送了一张图片/文件，请识别内容并回应。"
@@ -49,6 +51,7 @@ class LanguageLogicOptimizer(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
         self.config = config
+        self._pending_segment_tasks: set[asyncio.Task] = set()
         self._onboarding_guard: OnboardingGuard | None = None
         self._message_merger: MergeWindowManager | None = None
         self._reply_coordinator: ReplyCoordinator | None = None
@@ -358,8 +361,30 @@ class LanguageLogicOptimizer(Star):
             logger.debug("[消息合并] 结果清理失败", exc_info=True)
 
     async def _maybe_segment_reply(self, event: AstrMessageEvent) -> None:
-        """LLM 智能分段（Task 5 实现）。"""
-        return
+        """Split a long plain-text reply via the configured segment provider."""
+        if not self._get_config("enable_llm_segment", False):
+            return
+        result = getattr(event, "get_result", lambda: None)()
+        chain = getattr(result, "chain", None) if result is not None else None
+        if not isinstance(chain, list) or not chain:
+            return
+        if not all(isinstance(comp, Plain) for comp in chain):
+            return
+        text = _result_plain_text(result)
+        if not text:
+            return
+        try:
+            segments = await split_reply(text, self.context, self._get_config)
+        except Exception:
+            logger.warning("[智能分段] 分段失败，按原文发送", exc_info=True)
+            return
+        if not segments or len(segments) < 2:
+            return
+        chain[:] = [Plain(segments[0])]
+        try:
+            event.set_extra("segment_followups", list(segments[1:]))
+        except Exception:
+            logger.debug("[智能分段] 记录补发段失败", exc_info=True)
 
     @_event_filter.after_message_sent(priority=1000)
     async def after_message_sent(self, event: AstrMessageEvent) -> None:
@@ -369,6 +394,49 @@ class LanguageLogicOptimizer(Star):
             logger.debug("[自回复标记] 记录发送失败", exc_info=True)
         self._get_message_merger().clear_state(event)
         self._get_reply_coordinator().finish_active(event)
+        self._send_segment_followups(event)
+
+    def _send_segment_followups(self, event: AstrMessageEvent) -> None:
+        """Queue the remaining segments for delayed follow-up sends."""
+        getter = getattr(event, "get_extra", None)
+        if not callable(getter):
+            return
+        try:
+            followups = getter("segment_followups")
+        except Exception:
+            return
+        if not followups:
+            return
+        origin = getattr(event, "unified_msg_origin", None)
+        sender = getattr(self.context, "send_message", None)
+        if not origin or not callable(sender):
+            return
+        delay_min = self._get_float_config("segment_delay_min", 0.8)
+        delay_max = self._get_float_config("segment_delay_max", 2.0)
+        if delay_min < 0.0 or delay_max < delay_min:
+            delay_min, delay_max = 0.8, 2.0
+        task = asyncio.create_task(
+            self._send_segment_task(origin, followups, delay_min, delay_max)
+        )
+        self._pending_segment_tasks.add(task)
+        task.add_done_callback(self._pending_segment_tasks.discard)
+
+    async def _send_segment_task(
+        self,
+        origin: str,
+        followups: list[str],
+        delay_min: float,
+        delay_max: float,
+    ) -> None:
+        for index, seg in enumerate(followups, start=2):
+            await asyncio.sleep(random.uniform(delay_min, delay_max))
+            try:
+                chain = MessageChain().message(seg)
+                await self.context.send_message(origin, chain)
+                logger.info("[智能分段] 已发送第 %d 段", index)
+                self._get_self_reply_marker().record_sent_text(origin, seg)
+            except Exception:
+                logger.warning("[智能分段] 补发第 %d 段失败", index, exc_info=True)
 
     def _get_config(self, key: str, default=None):
         context = getattr(self, "context", None)

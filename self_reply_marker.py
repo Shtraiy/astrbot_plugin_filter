@@ -215,6 +215,16 @@ class SelfReplyMarker:
         queue = self._entries.setdefault(origin, deque(maxlen=MAX_MARK_ENTRIES))
         queue.append(_SentEntry(timestamp=self._now(), text=text, media=media))
 
+    def record_sent_text(self, origin: str, text: str) -> None:
+        """Record a single plain-text follow-up segment as a self reply."""
+        origin = str(origin or "")
+        text = (text or "").strip()
+        if not origin or not text:
+            return
+        self._prune(origin)
+        queue = self._entries.setdefault(origin, deque(maxlen=MAX_MARK_ENTRIES))
+        queue.append(_SentEntry(timestamp=self._now(), text=text, media=[]))
+
     def mark_own_recent_replies(self, req: Any, event: Any) -> bool:
         origin = str(getattr(event, "unified_msg_origin", "") or "")
         if not origin:

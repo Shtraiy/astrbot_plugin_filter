@@ -714,3 +714,10 @@ def test_mark_context_media_ownership_is_idempotent():
 
     assert mark_context_media_ownership(req) == 1
     assert mark_context_media_ownership(req) == 0  # 已加前缀，不重复
+def test_record_sent_text_stores_plain_entry():
+    from _astrbot_plugin_filter_test.self_reply_marker import SelfReplyMarker
+
+    marker = SelfReplyMarker(get_config=lambda k, d: d)
+    marker.record_sent_text("group:1", "补充段")
+
+    assert marker.recently_sent_duplicate("group:1", "补充段") is True
