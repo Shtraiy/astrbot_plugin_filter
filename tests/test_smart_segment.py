@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 from _astrbot_plugin_filter_test.smart_segment import (
@@ -99,6 +100,50 @@ def test_split_reply_without_provider_uses_rules():
     )
     assert result is not None
     assert "".join(result) == text
+
+
+def test_split_reply_respects_llm_single_segment_no_split():
+    """模型明确判断无需分段时保持单条发送，不被规则按标点切分（诗歌场景）。"""
+    text = "静夜思\n李白\n床前明月光，疑是地上霜。\n举头望明月，低头思故乡。"
+    context = SimpleNamespace(
+        llm_generate=async_stub(json.dumps([text], ensure_ascii=False))
+    )
+    config = {
+        "segment_provider_id": "p1",
+        "segment_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+    }
+
+    result = asyncio.run(split_reply(text, context, lambda k, d: config.get(k, d)))
+
+    assert result is None
+
+
+def test_split_reply_llm_single_segment_with_rewrite_falls_back():
+    """模型改写内容的单段结果仍视为失败，回退规则分段保证内容不丢。"""
+    text = "这是第一句比较长的内容。这是第二句比较长的内容。"
+    context = SimpleNamespace(llm_generate=async_stub('["改写了原文的单段"]'))
+    config = {
+        "segment_provider_id": "p1",
+        "segment_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+    }
+
+    result = asyncio.run(split_reply(text, context, lambda k, d: config.get(k, d)))
+
+    assert result is not None
+    assert "".join(result) == text
+
+
+def test_rule_split_keeps_newline_separated_poem_lines_together():
+    """规则回退不按句号逐行切分换行分隔的诗句，且拼接后与原文一致。"""
+    text = "静夜思\n李白\n床前明月光，疑是地上霜。\n举头望明月，低头思故乡。"
+
+    parts = rule_split(text, 3)
+
+    assert parts == [text]
 
 
 def async_stub(raw: str):

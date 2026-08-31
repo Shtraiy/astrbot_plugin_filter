@@ -154,6 +154,7 @@ v3.1.0 起插件不再打断或重生成旧回复：旧回复正常发完，新�
 - **重构（破坏性）**：合并窗口改为**滑动窗口**——窗口期内同一用户的任何消息（群聊无需再 @）都会重置计时器，连续静默满 `merge_window_seconds`（默认 6 秒，设置可改）才合并并发起一次 LLM 请求。
 - **移除**：规划期"立刻截断 + 合并重生成"机制（含 `active_event_registry` 停止、`agent_stop_requested` 重标、supersede、修正词打断、规划期 TTL）；在途回复不再被打断，新消息交给 AstrBot 原生 follow-up。删除 `merge_guards.py`；配置删除 `merge_planning_ttl`、`merge_stop_remark_seconds`。
 - **新增**：LLM 智能分段——超过 `segment_min_chars`（默认 150 字）的纯文本回复调用分段 provider 按语义拆分（默认最多 3 段），拼接后与原文零改动校验通过才使用，段间随机延迟逐条补发；未配置 provider / 超时 / 校验失败自动回退规则分段。新增 `smart_segment.py`。
+- **修复（诗歌场景）**：模型判断"无需分段"时保持单条发送，不再被规则回退按 `。！？` 逐行切分；规则断句改为零宽匹配，不再吞掉标点后的换行，换行分隔的诗句（诗名/作者/每句）会作为完整语义块保留。
 - **配置**：新增 `enable_llm_segment`、`segment_provider_id`（`_special: select_provider` 下拉）、`segment_min_chars`、`segment_max_messages`（可见）与 `segment_timeout_seconds`、`segment_delay_min/max`（隐藏）；`merge_window_seconds` 转可见。
 
 ### v3.0.30

@@ -20,7 +20,7 @@ SEGMENT_PROMPT = (
 )
 
 _FENCE_RE = re.compile(r"```")
-_SENT_BOUNDARY_RE = re.compile(r"(?<=[。！？!?；;])\s*")
+_SENT_BOUNDARY_RE = re.compile(r"(?<=[。！？!?；;])(?=\S)")
 
 
 def _compact(text: str) -> str:
@@ -96,7 +96,8 @@ def rule_split(text: str, max_messages: int) -> list[str]:
         return []
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     if len(paragraphs) < 2:
-        sentences = [s.strip() for s in _SENT_BOUNDARY_RE.split(text) if s.strip()]
+        # 零宽断句：不吞标点后的换行/空格，保证各段拼接后与原文一致
+        sentences = [s for s in _SENT_BOUNDARY_RE.split(text) if s.strip()]
         paragraphs = sentences or [text]
     paragraphs = _protect_fences(paragraphs)
     return _cap_parts(paragraphs, max_messages)
@@ -148,6 +149,15 @@ async def _try_llm_segment(
         if parts is None:
             logger.warning("[智能分段] LLM 输出不是合法 JSON 数组，回退规则分段")
             return None
+        if len(parts) == 1:
+            # 模型明确判断无需分段：内容与围栏校验通过则尊重其判断，
+            # 保持单条发送，避免规则回退按标点机械切分（如诗歌逐行断句）。
+            if _compact(parts[0]) == _compact(text) and _fences_balanced(parts[0]):
+                return parts
+            logger.warning(
+                "[智能分段] 模型单段结果改动了原文，回退规则分段"
+            )
+            return None
         if not validate_segments(text, parts, max_messages):
             logger.warning(
                 "[智能分段] 校验失败（内容被改动/段数超限/围栏切断），回退规则分段"
@@ -180,7 +190,7 @@ async def split_reply(
         logger.warning("[智能分段] 未配置 segment_provider_id，仅使用规则分段")
     if segments is None:
         segments = _protect_fences(rule_split(text, max_messages))
-    segments = _cap_parts(segments, max_messages)
+        segments = _cap_parts(segments, max_messages)
     if len(segments) < 2:
         return None
     return segments
