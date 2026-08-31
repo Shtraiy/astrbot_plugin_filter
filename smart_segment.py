@@ -14,7 +14,7 @@ SEGMENT_PROMPT = (
     "严格要求：\n"
     "1. 不增删、不改写、不润色、不翻译原文的任何文字，只决定在哪里分段；\n"
     "2. 每个分段是一个完整、自然、可独立阅读的语义块；\n"
-    "3. 只输出 JSON 数组，每个元素是一条消息的完整文本；不要输出解释或前后缀；\n"
+    "3. 只输出 JSON 数组，每个元素是一条消息的完整文本；不要输出解释、前后缀或 Markdown 代码块；\n"
     "4. 若原文不适合分段，输出只含一个元素的数组。\n"
     "原文：\n{text}"
 )
@@ -32,23 +32,52 @@ def _fences_balanced(text: str) -> bool:
 
 
 def parse_segment_json(raw: str) -> list[str] | None:
-    """Parse an LLM JSON-array reply into a list of strings."""
+    """Parse an LLM JSON-array reply into a list of strings.
+
+    Tolerates markdown fences, leading/trailing prose, single-quoted arrays
+    and ``{"segments": [...]}`` wrappers so small models that ignore the
+    "JSON only" instruction still work.
+    """
     raw = (raw or "").strip()
+    if not raw:
+        return None
     if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw).strip()
+    candidates = [raw]
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start >= 0 and end > start:
+        candidates.append(raw[start : end + 1])
+    for candidate in candidates:
+        data = _loads_lenient(candidate)
+        if isinstance(data, dict):
+            for key in ("segments", "messages", "result", "parts"):
+                value = data.get(key)
+                if isinstance(value, list) and value:
+                    data = value
+                    break
+        if isinstance(data, list) and data:
+            parts = [item for item in data if isinstance(item, str)]
+            if len(parts) == len(data):
+                return parts
+    return None
+
+
+def _loads_lenient(raw: str):
+    """json.loads with a single-quote fallback (``ast.literal_eval``)."""
     if not raw:
         return None
     try:
-        data = json.loads(raw)
+        return json.loads(raw)
+    except Exception:
+        pass
+    try:
+        import ast
+
+        return ast.literal_eval(raw)
     except Exception:
         return None
-    if not isinstance(data, list) or not data:
-        return None
-    parts = [item for item in data if isinstance(item, str)]
-    if len(parts) != len(data):
-        return None
-    return parts
 
 
 def validate_segments(
@@ -176,6 +205,7 @@ async def _try_llm_segment(
         parts = parse_segment_json(raw)
         if parts is None:
             logger.warning("[智能分段] LLM 输出不是合法 JSON 数组，回退规则分段")
+            logger.debug("[智能分段] LLM 原始输出: %s", (raw or "")[:200])
             return None
         if len(parts) == 1:
             # 模型明确判断无需分段：内容与围栏校验通过则尊重其判断，

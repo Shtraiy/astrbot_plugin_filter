@@ -24,6 +24,14 @@ def test_parse_segment_json_accepts_plain_and_fenced_json():
     assert parse_segment_json("[1, 2]") is None  # 非字符串元素
 
 
+def test_parse_segment_json_tolerates_prose_single_quotes_and_dict():
+    assert parse_segment_json('好的，分段如下：\n["a", "b"]') == ["a", "b"]
+    assert parse_segment_json("```\n['a', 'b']\n```") == ["a", "b"]
+    assert parse_segment_json("```python\n['a', 'b']\n```") == ["a", "b"]
+    assert parse_segment_json('{"segments": ["a", "b"]}') == ["a", "b"]
+    assert parse_segment_json('```JSON\n["a", "b"]\n```') == ["a", "b"]
+
+
 def test_validate_segments_enforces_zero_rewrite():
     assert validate_segments("你好世界", ["你好", "世界"], 3) is True
     assert validate_segments("你好世界", ["你好", "世界！"], 3) is False  # 改动
@@ -118,6 +126,27 @@ def test_split_reply_llm_ok_with_validation():
     result = asyncio.run(
         split_reply(text, context, lambda k, d: config.get(k, d))
     )
+    assert result == ["这是第一段比较长的内容。", "这里是第二段比较长的内容。"]
+
+
+def test_split_reply_llm_with_prose_wrapped_output_ok():
+    text = "这是第一段比较长的内容。这里是第二段比较长的内容。"
+    context = SimpleNamespace(
+        llm_generate=async_stub(
+            '好的，以下是拆分结果：\n["这是第一段比较长的内容。", "这里是第二段比较长的内容。"]'
+        )
+    )
+    config = {
+        "segment_provider_id": "p1",
+        "segment_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+    }
+
+    result = asyncio.run(
+        split_reply(text, context, lambda k, d: config.get(k, d))
+    )
+
     assert result == ["这是第一段比较长的内容。", "这里是第二段比较长的内容。"]
 
 

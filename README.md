@@ -159,6 +159,7 @@ v3.1.0 起插件不再打断或重生成旧回复：旧回复正常发完，新�
 - **修复（诗歌场景）**：模型判断"无需分段"时保持单条发送，不再被规则回退按 `。！？` 逐行切分；规则断句改为零宽匹配，不再吞掉标点后的换行，换行分隔的诗句（诗名/作者/每句）会作为完整语义块保留。
 - **机械回退增强**：机械分段（`。！？~` 断句）后默认删除每条末尾的 `。～~` 分隔符（`segment_strip_chars` 可配，留空则不删），聊天观感更自然；LLM 分段路径保持零改动。
 - **阈值分层**：`segment_min_chars` 只作为 LLM 分段门槛；低于它但达到 `segment_mechanical_min_chars`（默认 20 字，新增可见配置）的回复仍走机械分段，不再整条发送。
+- **容错解析**：分段模型的 JSON 输出解析更宽容——支持 Markdown 代码块、前后解释文字、单引号数组与 `{"segments": [...]}` 包装，小模型不听话时也能正确取到分段，避免误回退机械分段。
 - **配置**：新增 `enable_llm_segment`、`segment_provider_id`（`_special: select_provider` 下拉）、`segment_min_chars`、`segment_max_messages`（可见）与 `segment_timeout_seconds`、`segment_delay_min/max`（隐藏）；`merge_window_seconds` 转可见。
 
 ### v3.0.30
