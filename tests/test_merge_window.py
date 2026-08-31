@@ -156,35 +156,6 @@ def test_merge_wake_appends_wake_followup_during_window():
     )
 
 
-def test_take_planning_returns_accumulated_text_and_rearm_supports_recursion():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
-    manager.start_window(owner)
-    manager.finalize_window(owner)
-    follow = FakeEvent("u1", "group:1", "补充", wake=False)
-
-    old, segments, media = manager.take_planning(follow)
-    assert old is owner
-    assert segments == ["第一段"]
-    assert media == []
-
-    merged_segments = manager.append_segment(segments, follow.message_str)
-    assert merged_segments == ["第一段", "补充"]
-    assert manager.rearm_planning(follow, merged_segments)
-
-    old2, segments2, _ = manager.take_planning(follow)
-    assert old2 is follow
-    assert segments2 == ["第一段", "补充"]
-
-
-def test_take_planning_requires_planning_phase():
-    manager = make_manager()
-    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
-
-    assert manager.start_window(owner)
-    assert manager.take_planning(FakeEvent("u1", "group:1", "窗口期")) is None
-
-
 def test_media_merge_attaches_to_owner():
     manager = make_manager(merge_include_media=True)
     owner = FakeEvent("u1", "group:1", "第一段", wake=True)
@@ -204,10 +175,10 @@ def test_clear_state_drops_window_state():
     manager = make_manager()
     owner = FakeEvent("u1", "group:1", "第一段", wake=True)
     manager.start_window(owner)
-    manager.finalize_window(owner)
 
     manager.clear_state(owner)
-    assert manager.planning_active(owner) is False
+    assert manager.quiet_remaining(owner, 6.0) == 0.0
+    assert manager.is_window_open(FakeEvent("u1", "group:1", "x", wake=True)) is False
 
 
 def test_finalize_records_last_captured_message_id():
@@ -317,47 +288,53 @@ def test_cancel_window_requires_window_phase():
     assert manager.cancel_window(FakeEvent("u1", "group:1", "x", wake=True)) is None
 
 
-def test_planning_state_expires_after_ttl():
-    clock = {"t": 1000.0}
-    manager = make_manager(merge_planning_ttl=60, now=lambda: clock["t"])
+def test_capture_resets_sliding_quiet_remaining():
+    clock = {"t": 100.0}
+    manager = make_manager(now=lambda: clock["t"])
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+
+    assert manager.start_window(owner)
+    assert manager.quiet_remaining(owner, 6.0) == 6.0
+
+    clock["t"] += 3.0
+    follow = FakeEvent("u1", "group:1", "第二段", wake=False)
+    assert manager.capture(follow)
+    # 捕获后计时重置，仍需完整 6 秒静默
+    assert manager.quiet_remaining(owner, 6.0) == 6.0
+
+    clock["t"] += 5.5
+    assert manager.quiet_remaining(owner, 6.0) == 0.5
+    clock["t"] += 0.6
+    assert manager.quiet_remaining(owner, 6.0) == 0.0
+
+
+def test_merge_wake_resets_sliding_quiet_remaining():
+    clock = {"t": 100.0}
+    manager = make_manager(now=lambda: clock["t"])
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+
+    clock["t"] += 4.0
+    wake = FakeEvent("u1", "group:1", "@bot 补充", wake=True)
+    assert manager.merge_wake(wake)
+    assert manager.quiet_remaining(owner, 6.0) == 6.0
+
+
+def test_finalize_window_destroys_state():
+    manager = make_manager()
+    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
+    manager.start_window(owner)
+
+    manager.finalize_window(owner)
+
+    assert manager.quiet_remaining(owner, 6.0) == 0.0
+    assert manager.is_window_open(FakeEvent("u1", "group:1", "x", wake=True)) is False
+
+
+def test_capture_rejects_after_finalize():
+    manager = make_manager()
     owner = FakeEvent("u1", "group:1", "第一段", wake=True)
     manager.start_window(owner)
     manager.finalize_window(owner)
-    follow = FakeEvent("u1", "group:1", "补充", wake=False)
 
-    assert manager.planning_active(follow) is True
-
-    clock["t"] += 61
-
-    assert manager.planning_active(follow) is False
-    assert manager.take_planning(follow) is None
-
-
-def test_rearm_planning_resets_ttl():
-    clock = {"t": 1000.0}
-    manager = make_manager(merge_planning_ttl=60, now=lambda: clock["t"])
-    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
-    manager.start_window(owner)
-    manager.finalize_window(owner)
-    follow = FakeEvent("u1", "group:1", "补充", wake=True)
-
-    clock["t"] += 30
-    assert manager.rearm_planning(follow, ["第一段", "补充"])
-
-    clock["t"] += 30  # 距 rearm 30 秒，未过期
-    assert manager.planning_active(follow) is True
-
-    clock["t"] += 31  # 距 rearm 61 秒，过期
-    assert manager.planning_active(follow) is False
-
-
-def test_planning_ttl_zero_disables_expiry():
-    clock = {"t": 1000.0}
-    manager = make_manager(merge_planning_ttl=0, now=lambda: clock["t"])
-    owner = FakeEvent("u1", "group:1", "第一段", wake=True)
-    manager.start_window(owner)
-    manager.finalize_window(owner)
-
-    clock["t"] += 9999
-
-    assert manager.planning_active(FakeEvent("u1", "group:1", "x", wake=False)) is True
+    assert not manager.capture(FakeEvent("u1", "group:1", "迟到消息", wake=False))

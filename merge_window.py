@@ -1,12 +1,13 @@
 """Coalesce same-user segmented messages into a single LLM turn.
 
-State machine per ``(unified_msg_origin, sender_id)``:
+Single-phase sliding window per ``(unified_msg_origin, sender_id)``:
 
-- ``"window"``: the first wake-up is held for ``merge_window_seconds``;
-  same-user follow-up text/images are appended to the pending buffer.
-- ``"planning"``: the window closed and the reply is being generated; a new
-  message from the same user (with or without a wake word) supersedes the old
-  event and regenerates with the accumulated text.
+- the first wake-up opens a window and is held until the user stays silent
+  for ``merge_window_seconds``;
+- every same-user follow-up (with or without a wake word) is appended to the
+  pending buffer and resets the quiet timer;
+- once the window closes, ``finalize_window`` destroys the state; an
+  in-flight reply is never interrupted by later messages.
 """
 
 from __future__ import annotations
@@ -37,25 +38,21 @@ _MULTI_MESSAGE_NOTE = (
 @dataclass
 class _MergeState:
     owner_event: Any
-    phase: str
     pending_text: str
     segments: list[str] = field(default_factory=list)
     pending_media: list[Any] = field(default_factory=list)
     captured_events: set[Any] = field(default_factory=set)
     captured_count: int = 0
     last_captured_id: Any = None
-    planning_started_at: float = 0.0
+    last_activity_at: float = 0.0
 
 
 class MergeWindowManager:
     """Track a merge window per (origin, sender) for segmented messages.
 
-    Phases:
-    - ``"window"``: the first wake-up is held; same-user follow-up messages
-      are appended to ``pending_text`` / ``pending_media``.
-    - ``"planning"``: the window closed and the reply is being generated; a
-      new message from the same user supersedes the old event and takes the
-      accumulated text along into a regenerated request.
+    The window is a single phase: any same-user message resets the quiet
+    timer, and the window closes (state destroyed) once the user stays
+    silent for ``merge_window_seconds``.
     """
 
     def __init__(
@@ -144,9 +141,9 @@ class MergeWindowManager:
             self._states.pop(next(iter(self._states)), None)
         self._states[key] = _MergeState(
             owner_event=event,
-            phase="window",
             pending_text=str(getattr(event, "message_str", "") or "").strip(),
             segments=[str(getattr(event, "message_str", "") or "").strip()],
+            last_activity_at=self._now(),
         )
         return True
 
@@ -155,24 +152,23 @@ class MergeWindowManager:
         if key is None:
             return False
         state = self._states.get(key)
-        return (
-            state is not None
-            and state.phase == "window"
-            and state.owner_event is not event
-        )
+        return state is not None and state.owner_event is not event
 
-    def planning_active(self, event: Any) -> bool:
-        """True when this user has a fresh (unexpired) planning state."""
+    def quiet_remaining(
+        self,
+        event: Any,
+        window_seconds: float,
+        now: float | None = None,
+    ) -> float:
+        """Seconds until this window is quiet; 0 when no window is open."""
         key = self.window_key(event)
         if key is None:
-            return False
+            return 0.0
         state = self._states.get(key)
-        if state is None or state.phase != "planning":
-            return False
-        if self._planning_expired(state):
-            self._states.pop(key, None)
-            return False
-        return True
+        if state is None:
+            return 0.0
+        current = self._now() if now is None else now
+        return max(0.0, float(window_seconds) - (current - state.last_activity_at))
 
     @classmethod
     def message_has_quote(cls, event: Any) -> bool:
@@ -188,7 +184,7 @@ class MergeWindowManager:
         if key is None:
             return None
         state = self._states.get(key)
-        if state is None or state.phase != "window":
+        if state is None:
             return None
         self._states.pop(key, None)
         return state.owner_event
@@ -199,7 +195,7 @@ class MergeWindowManager:
         if key is None:
             return False
         state = self._states.get(key)
-        if state is None or state.phase != "window":
+        if state is None:
             return False
         if state.owner_event is event or event in state.captured_events:
             return False
@@ -222,6 +218,7 @@ class MergeWindowManager:
         state.captured_events.add(event)
         state.captured_count += 1
         state.last_captured_id = self._event_message_id(event)
+        state.last_activity_at = self._now()
         return True
 
     def is_captured(self, event: Any) -> bool:
@@ -238,7 +235,7 @@ class MergeWindowManager:
         if key is None:
             return False
         state = self._states.get(key)
-        if state is None or state.phase != "window":
+        if state is None:
             return False
         if state.owner_event is event or event in state.captured_events:
             return False
@@ -259,6 +256,7 @@ class MergeWindowManager:
         state.captured_events.add(event)
         state.captured_count += 1
         state.last_captured_id = self._event_message_id(event)
+        state.last_activity_at = self._now()
         return True
 
     def finalize_window(self, event: Any) -> str:
@@ -271,70 +269,9 @@ class MergeWindowManager:
             return str(getattr(event, "message_str", "") or "")
         merged = self.format_segments(state.segments)
         self.attach_media(event, state.pending_media)
-        state.pending_media = []
-        state.phase = "planning"
-        state.planning_started_at = self._now()
-        state.captured_events.clear()
         self._record_last_message_id(event, state.last_captured_id)
-        return merged
-
-    def take_planning(self, event: Any) -> tuple[Any, list[str], list[Any]] | None:
-        """Consume the planning state; return (old_event, text, media, task)."""
-        key = self.window_key(event)
-        if key is None:
-            return None
-        state = self._states.get(key)
-        if state is None or state.phase != "planning":
-            return None
-        if self._planning_expired(state):
-            self._states.pop(key, None)
-            return None
         self._states.pop(key, None)
-        media = self._event_media(state.owner_event)
-        media.extend(state.pending_media)
-        return (state.owner_event, list(state.segments), media)
-
-    def rearm_planning(
-        self,
-        event: Any,
-        segments: list[str],
-    ) -> bool:
-        """Re-create a planning state for a regenerated event."""
-        key = self.window_key(event)
-        if key is None:
-            return False
-        if len(self._states) >= MAX_MERGE_STATES:
-            self._states.pop(next(iter(self._states)), None)
-        self._states[key] = _MergeState(
-            owner_event=event,
-            phase="planning",
-            pending_text="\n".join(
-                str(seg or "").strip() for seg in (segments or [])
-            ).strip(),
-            segments=[
-                str(seg or "").strip()
-                for seg in (segments or [])
-                if str(seg or "").strip()
-            ],
-            planning_started_at=self._now(),
-        )
-        return True
-
-    def sync_pending_text(self, event: Any, text: str) -> None:
-        """Sync a post-finalize rewrite (e.g. media-only placeholder) back into
-        the planning state so later take_planning merges see the new text."""
-        key = self.window_key(event)
-        if key is None:
-            return
-        state = self._states.get(key)
-        if state is None or state.owner_event is not event:
-            return
-        clean = str(text or "").strip()
-        if clean == self.format_segments(state.segments):
-            state.pending_text = clean
-            return
-        state.pending_text = clean
-        state.segments = [clean] if clean else []
+        return merged
 
     def clear_state(self, event: Any) -> None:
         """Drop the state once the owner's reply is decorated or sent."""
@@ -438,17 +375,5 @@ class MergeWindowManager:
             return max(0, int(self._get_config("merge_max_chars", 2000)))
         except (TypeError, ValueError):
             return 2000
-
-    def _planning_ttl(self) -> float:
-        try:
-            value = float(self._get_config("merge_planning_ttl", 60.0))
-        except (TypeError, ValueError):
-            return 60.0
-        return max(0.0, value)
-
-    def _planning_expired(self, state: _MergeState) -> bool:
-        ttl = self._planning_ttl()
-        return ttl > 0 and self._now() - state.planning_started_at > ttl
-
 
 __all__ = ["MAX_MERGE_STATES", "MergeWindowManager"]
