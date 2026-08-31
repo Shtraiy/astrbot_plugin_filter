@@ -126,6 +126,7 @@ def _import_plugin_as_package() -> None:
         "onboarding_guard",
         "reply_coordinator",
         "self_reply_marker",
+        "smart_segment",
         "task_commitment_guard",
         "main",
     ):
