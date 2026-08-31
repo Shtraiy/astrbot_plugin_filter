@@ -20,7 +20,7 @@ SEGMENT_PROMPT = (
 )
 
 _FENCE_RE = re.compile(r"```")
-_SENT_BOUNDARY_RE = re.compile(r"(?<=[。！？!?；;])(?=\S)")
+_SENT_BOUNDARY_RE = re.compile(r"(?<=[。！？!?；;～~])(?=\S)")
 
 
 def _compact(text: str) -> str:
@@ -87,6 +87,26 @@ def _cap_parts(parts: list[str], max_messages: int) -> list[str]:
     head = parts[: max_messages - 1]
     tail = "\n\n".join(parts[max_messages - 1 :])
     return head + [tail]
+
+
+def strip_segment_delimiters(
+    segments: list[str],
+    chars: str,
+) -> list[str]:
+    """Strip trailing delimiter chars (e.g. ``。～~``) from each segment.
+
+    Applies only to the mechanical fallback path so chat segments read
+    naturally without trailing split punctuation; empty leftovers are
+    dropped and the remaining content is otherwise untouched.
+    """
+    cleaned: list[str] = []
+    for seg in segments:
+        text = (seg or "").rstrip()
+        while text and text[-1] in (chars or ""):
+            text = text[:-1].rstrip()
+        if text:
+            cleaned.append(text)
+    return cleaned
 
 
 def rule_split(text: str, max_messages: int) -> list[str]:
@@ -191,6 +211,9 @@ async def split_reply(
     if segments is None:
         segments = _protect_fences(rule_split(text, max_messages))
         segments = _cap_parts(segments, max_messages)
+        strip_chars = str(get_config("segment_strip_chars", "。～~") or "")
+        if strip_chars:
+            segments = strip_segment_delimiters(segments, strip_chars)
     if len(segments) < 2:
         return None
     return segments
@@ -201,5 +224,6 @@ __all__ = [
     "parse_segment_json",
     "rule_split",
     "split_reply",
+    "strip_segment_delimiters",
     "validate_segments",
 ]

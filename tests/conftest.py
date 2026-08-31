@@ -235,6 +235,7 @@ def make_optimizer(**overrides):
         "segment_provider_id": "",
         "segment_min_chars": 150,
         "segment_max_messages": 3,
+        "segment_strip_chars": "。～~",
         "segment_timeout_seconds": 10.0,
         "segment_delay_min": 0.8,
         "segment_delay_max": 2.0,

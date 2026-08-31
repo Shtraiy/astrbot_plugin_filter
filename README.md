@@ -59,6 +59,7 @@
 | 分段 LLM provider | 空 | 下拉选择分段用 provider（在 AstrBot Provider 管理里创建）；留空仅规则分段 |
 | 分段最小字数 | 150 | 纯文本回复达到该字数才尝试智能分段 |
 | 最大分段数 | 3 | 回复最多拆成 N 条消息（2~5），超出合并到末段 |
+| 机械分段时删除的分隔符 | `。～~` | 未配置 provider / LLM 分段失败走机械回退时，删除每条分段末尾的这些字符；留空不删 |
 | 启用 bot 自回复归属标记 | true | 注入 `<self_reply_mark>` 归属标记 |
 | 启用群聊内容防护 | true | 拦截词库命中与诱导绕过 |
 | 内容防护模式 | balanced | `balanced` 只拦截明确风险；`strict` 更积极 |
@@ -155,6 +156,7 @@ v3.1.0 起插件不再打断或重生成旧回复：旧回复正常发完，新�
 - **移除**：规划期"立刻截断 + 合并重生成"机制（含 `active_event_registry` 停止、`agent_stop_requested` 重标、supersede、修正词打断、规划期 TTL）；在途回复不再被打断，新消息交给 AstrBot 原生 follow-up。删除 `merge_guards.py`；配置删除 `merge_planning_ttl`、`merge_stop_remark_seconds`。
 - **新增**：LLM 智能分段——超过 `segment_min_chars`（默认 150 字）的纯文本回复调用分段 provider 按语义拆分（默认最多 3 段），拼接后与原文零改动校验通过才使用，段间随机延迟逐条补发；未配置 provider / 超时 / 校验失败自动回退规则分段。新增 `smart_segment.py`。
 - **修复（诗歌场景）**：模型判断"无需分段"时保持单条发送，不再被规则回退按 `。！？` 逐行切分；规则断句改为零宽匹配，不再吞掉标点后的换行，换行分隔的诗句（诗名/作者/每句）会作为完整语义块保留。
+- **机械回退增强**：机械分段（`。！？~` 断句）后默认删除每条末尾的 `。～~` 分隔符（`segment_strip_chars` 可配，留空则不删），聊天观感更自然；LLM 分段路径保持零改动。
 - **配置**：新增 `enable_llm_segment`、`segment_provider_id`（`_special: select_provider` 下拉）、`segment_min_chars`、`segment_max_messages`（可见）与 `segment_timeout_seconds`、`segment_delay_min/max`（隐藏）；`merge_window_seconds` 转可见。
 
 ### v3.0.30

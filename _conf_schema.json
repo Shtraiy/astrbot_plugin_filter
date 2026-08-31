@@ -71,6 +71,12 @@
     "hint": "回复最多拆成 N 条消息（2~5），超出部分合并到末段。",
     "default": 3
   },
+  "segment_strip_chars": {
+    "description": "机械分段时删除的分隔符",
+    "type": "string",
+    "hint": "未配置 provider 或 LLM 分段失败、走机械分段时，从每条分段末尾删除这些字符（如句号、波浪号），让聊天更自然；留空则不删除。注意：默认不含 ！？，它们承载语气，删除会改变语义。",
+    "default": "。～~"
+  },
   "segment_timeout_seconds": {
     "description": "分段请求超时（秒）",
     "type": "float",

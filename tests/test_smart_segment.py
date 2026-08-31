@@ -83,7 +83,8 @@ def test_split_reply_llm_invalid_falls_back_to_rules():
         split_reply(text, context, lambda k, d: config.get(k, d))
     )
     assert result is not None
-    assert "".join(result) == text
+    # 机械回退默认删除分段分隔符
+    assert result == ["这是第一段比较长的内容", "这里是第二段比较长的内容"]
 
 
 def test_split_reply_without_provider_uses_rules():
@@ -99,7 +100,7 @@ def test_split_reply_without_provider_uses_rules():
         split_reply(text, context, lambda k, d: config.get(k, d))
     )
     assert result is not None
-    assert "".join(result) == text
+    assert result == ["这是第一段比较长的内容", "这里是第二段比较长的内容"]
 
 
 def test_split_reply_respects_llm_single_segment_no_split():
@@ -134,7 +135,7 @@ def test_split_reply_llm_single_segment_with_rewrite_falls_back():
     result = asyncio.run(split_reply(text, context, lambda k, d: config.get(k, d)))
 
     assert result is not None
-    assert "".join(result) == text
+    assert result == ["这是第一句比较长的内容", "这是第二句比较长的内容"]
 
 
 def test_rule_split_keeps_newline_separated_poem_lines_together():
@@ -144,6 +145,66 @@ def test_rule_split_keeps_newline_separated_poem_lines_together():
     parts = rule_split(text, 3)
 
     assert parts == [text]
+
+
+def test_mechanical_fallback_strips_delimiters():
+    text = "这是第一句比较长的内容。这是第二句比较长的内容~这是第三句比较长的内容"
+    context = SimpleNamespace()
+    config = {
+        "segment_provider_id": "",
+        "segment_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+        "segment_strip_chars": "。～~",
+    }
+
+    result = asyncio.run(split_reply(text, context, lambda k, d: config.get(k, d)))
+
+    assert result == [
+        "这是第一句比较长的内容",
+        "这是第二句比较长的内容",
+        "这是第三句比较长的内容",
+    ]
+
+
+def test_mechanical_fallback_strip_disabled_preserves_content():
+    text = "这是第一句比较长的内容。这是第二句比较长的内容。"
+    context = SimpleNamespace()
+    config = {
+        "segment_provider_id": "",
+        "segment_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+        "segment_strip_chars": "",
+    }
+
+    result = asyncio.run(split_reply(text, context, lambda k, d: config.get(k, d)))
+
+    assert result is not None
+    assert "".join(result) == text
+
+
+def test_llm_path_not_stripped():
+    """LLM 分段路径保持零改动，不删除分段符号。"""
+    first = "这是第一段比较长的内容。"
+    second = "这里是第二段比较长的内容。"
+    text = first + second
+    context = SimpleNamespace(
+        llm_generate=async_stub(
+            json.dumps([first, second], ensure_ascii=False)
+        )
+    )
+    config = {
+        "segment_provider_id": "p1",
+        "segment_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+        "segment_strip_chars": "。～~",
+    }
+
+    result = asyncio.run(split_reply(text, context, lambda k, d: config.get(k, d)))
+
+    assert result == [first, second]
 
 
 def async_stub(raw: str):

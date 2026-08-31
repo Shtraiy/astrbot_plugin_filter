@@ -11,6 +11,7 @@ class ConfigSchemaTests(unittest.TestCase):
         "segment_provider_id",
         "segment_min_chars",
         "segment_max_messages",
+        "segment_strip_chars",
         "enable_self_reply_mark",
         "enable_content_guard",
         "content_guard_mode",
@@ -79,6 +80,7 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(schema["merge_include_media"]["default"], True)
         self.assertEqual(schema["segment_min_chars"]["default"], 150)
         self.assertEqual(schema["segment_max_messages"]["default"], 3)
+        self.assertEqual(schema["segment_strip_chars"]["default"], "。～~")
         self.assertEqual(schema["segment_timeout_seconds"]["default"], 10.0)
         self.assertEqual(schema["segment_delay_min"]["default"], 0.8)
         self.assertEqual(schema["segment_delay_max"]["default"], 2.0)
