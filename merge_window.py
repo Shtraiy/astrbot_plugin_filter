@@ -260,7 +260,7 @@ class MergeWindowManager:
         return True
 
     def finalize_window(self, event: Any) -> str:
-        """Close the window, return the merged text, and move to planning."""
+        """Close the window, return the merged text, and destroy its state."""
         key = self.window_key(event)
         if key is None:
             return str(getattr(event, "message_str", "") or "")
