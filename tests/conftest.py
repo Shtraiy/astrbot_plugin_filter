@@ -121,7 +121,6 @@ def _import_plugin_as_package() -> None:
         "content_guard",
         "event_access",
         "interruption_guard",
-        "merge_guards",
         "merge_window",
         "onboarding_guard",
         "reply_coordinator",

@@ -6,6 +6,11 @@ from pathlib import Path
 class ConfigSchemaTests(unittest.TestCase):
     VISIBLE_KEYS = {
         "enable_message_merge",
+        "merge_window_seconds",
+        "enable_llm_segment",
+        "segment_provider_id",
+        "segment_min_chars",
+        "segment_max_messages",
         "enable_self_reply_mark",
         "enable_content_guard",
         "content_guard_mode",
@@ -15,8 +20,6 @@ class ConfigSchemaTests(unittest.TestCase):
         "llm_provider_id",
         "enable_llm_style",
         "llm_timeout_seconds",
-        "enable_llm_segment",
-        "segment_min_chars",
         "enable_de_ai_flavor",
         "enable_image_render",
         "image_min_list_items",
@@ -31,6 +34,8 @@ class ConfigSchemaTests(unittest.TestCase):
         "wakeup_interval_max",
         "queue_full_notice",
         "merge_continuation_ttl",
+        "merge_planning_ttl",
+        "merge_stop_remark_seconds",
     }
 
     def _schema(self):
@@ -72,7 +77,17 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(schema["merge_max_chars"]["default"], 2000)
         self.assertEqual(schema["merge_ignore_prefixes"]["default"], "/,!")
         self.assertEqual(schema["merge_include_media"]["default"], True)
-        self.assertEqual(schema["merge_planning_ttl"]["default"], 60.0)
+        self.assertEqual(schema["segment_min_chars"]["default"], 150)
+        self.assertEqual(schema["segment_max_messages"]["default"], 3)
+        self.assertEqual(schema["segment_timeout_seconds"]["default"], 10.0)
+        self.assertEqual(schema["segment_delay_min"]["default"], 0.8)
+        self.assertEqual(schema["segment_delay_max"]["default"], 2.0)
+
+    def test_segment_provider_uses_select_provider_special(self):
+        schema = self._schema()
+        self.assertEqual(
+            schema["segment_provider_id"].get("_special"), "select_provider"
+        )
 
     def test_self_reply_mark_defaults(self):
         schema = self._schema()

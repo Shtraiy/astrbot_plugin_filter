@@ -8,9 +8,8 @@
   "merge_window_seconds": {
     "description": "合并窗口时长（秒）",
     "type": "float",
-    "hint": "从第一条唤醒消息起等待后续分段的时长，运行时限制在 1~30 秒，默认 6 秒。",
-    "default": 6.0,
-    "invisible": true
+    "hint": "窗口期内同一用户的任何新消息都会重置计时器，连续静默满该时长才合并并发起回复；运行时限制在 1~30 秒，默认 6 秒。",
+    "default": 6.0
   },
   "merge_max_messages": {
     "description": "单个窗口最多合并的消息条数",
@@ -47,18 +46,50 @@
     "default": true,
     "invisible": true
   },
-  "merge_planning_ttl": {
-    "description": "规划期状态保留时长（秒）",
+  "enable_llm_segment": {
+    "description": "启用 LLM 智能分段",
+    "type": "bool",
+    "hint": "开启后，超过分段最小字数的纯文本回复会调用分段 provider 按语义拆成多条消息逐条发送；未配置 provider 或请求失败时自动回退规则分段。",
+    "default": false
+  },
+  "segment_provider_id": {
+    "description": "分段 LLM provider",
+    "type": "string",
+    "_special": "select_provider",
+    "hint": "选择用于智能分段的 LLM provider（在 AstrBot Provider 管理里创建，如 Siliconflow/Qwen/Qwen3.5-4B 或 -9B）；留空则仅使用规则分段。",
+    "default": ""
+  },
+  "segment_min_chars": {
+    "description": "分段最小字数",
+    "type": "int",
+    "hint": "纯文本回复达到该字数才尝试智能分段，短于此直接一条发送。",
+    "default": 150
+  },
+  "segment_max_messages": {
+    "description": "最大分段数",
+    "type": "int",
+    "hint": "回复最多拆成 N 条消息（2~5），超出部分合并到末段。",
+    "default": 3
+  },
+  "segment_timeout_seconds": {
+    "description": "分段请求超时（秒）",
     "type": "float",
-    "hint": "窗口关闭后，合并状态只在该时长内有效，超过后自动作废，避免残留状态把后来的无唤醒消息误判为补充；设为 0 表示不限制。",
-    "default": 60.0,
+    "hint": "分段 LLM 请求的最长等待时间，超时回退规则分段；运行时限制 1~30 秒。",
+    "default": 10.0,
     "invisible": true
   },
-  "merge_stop_remark_seconds": {
-    "description": "打断后停止标记的重标窗口（秒）",
+  "segment_delay_min": {
+    "description": "补发消息最小间隔（秒）",
     "type": "float",
-    "hint": "AstrBot 在 agent 中止时会把 agent_stop_requested 重置为 False；插件在打断后周期性重打该标记，直到事件停止或本窗口结束，防止新消息被 follow-up 捕获吞掉。设为 0 关闭重标。",
-    "default": 1.5,
+    "hint": "分段后的补发消息之间的随机延迟下限。",
+    "default": 0.8,
+    "invisible": true
+  },
+  "segment_delay_max": {
+    "description": "补发消息最大间隔（秒）",
+    "type": "float",
+    "hint": "分段后的补发消息之间的随机延迟上限。",
+    "default": 2.0,
     "invisible": true
   },
   "enable_self_reply_mark": {
