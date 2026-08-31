@@ -53,6 +53,57 @@ def test_split_reply_skips_short_text():
     assert asyncio.run(split_reply("太短", context, lambda k, d: d)) is None
 
 
+def test_split_reply_mechanical_below_llm_threshold_without_llm_call():
+    """低于 LLM 阈值但达到机械下限时走机械分段，且不调用 LLM。"""
+    text = "这是第一句比较长的内容。这是第二句比较长的内容。"  # 22 字 < 80
+    calls = []
+
+    async def record_stub(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(completion_text='["不应被调用"]')
+
+    config = {
+        "segment_provider_id": "p1",
+        "segment_min_chars": 80,
+        "segment_mechanical_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+        "segment_strip_chars": "。～~",
+    }
+
+    result = asyncio.run(
+        split_reply(text, SimpleNamespace(llm_generate=record_stub), lambda k, d: config.get(k, d))
+    )
+
+    assert calls == []
+    assert result == ["这是第一句比较长的内容", "这是第二句比较长的内容"]
+
+
+def test_split_reply_below_mechanical_floor_single_message():
+    """低于机械下限时不调 LLM、不机械切分，单条发送。"""
+    calls = []
+
+    async def record_stub(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(completion_text="")
+
+    config = {
+        "segment_provider_id": "p1",
+        "segment_min_chars": 80,
+        "segment_mechanical_min_chars": 20,
+        "segment_max_messages": 3,
+        "segment_timeout_seconds": 5,
+        "segment_strip_chars": "。～~",
+    }
+
+    result = asyncio.run(
+        split_reply("好的。", SimpleNamespace(llm_generate=record_stub), lambda k, d: config.get(k, d))
+    )
+
+    assert result is None
+    assert calls == []
+
+
 def test_split_reply_llm_ok_with_validation():
     text = "这是第一段比较长的内容。这里是第二段比较长的内容。"
     context = SimpleNamespace(

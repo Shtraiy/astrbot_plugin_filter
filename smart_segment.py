@@ -131,6 +131,14 @@ def _get_min_chars(get_config: Callable[[str, Any], Any]) -> int:
     return max(20, min(value, 1000))
 
 
+def _get_mechanical_min_chars(get_config: Callable[[str, Any], Any]) -> int:
+    try:
+        value = int(get_config("segment_mechanical_min_chars", 20))
+    except (TypeError, ValueError):
+        return 20
+    return max(1, min(value, 1000))
+
+
 def _get_max_messages(get_config: Callable[[str, Any], Any]) -> int:
     try:
         value = int(get_config("segment_max_messages", 3))
@@ -197,17 +205,36 @@ async def split_reply(
     context: Any,
     get_config: Callable[[str, Any], Any],
 ) -> list[str] | None:
-    """Return 2..max segments, or None to send the reply as-is."""
+    """Return 2..max segments, or None to send the reply as-is.
+
+    ``segment_min_chars`` only gates the LLM call; below it (or without a
+    provider / after LLM failure) the mechanical rule split still applies
+    once the text reaches ``segment_mechanical_min_chars``.
+    """
     text = (text or "").strip()
-    min_chars = _get_min_chars(get_config)
-    if not text or len(text) < min_chars:
-        logger.debug("[智能分段] 回复长度 %d 未达最小分段字数 %d，单条发送", len(text), min_chars)
+    if not text:
+        return None
+    llm_min_chars = _get_min_chars(get_config)
+    mech_min_chars = _get_mechanical_min_chars(get_config)
+    if len(text) < mech_min_chars:
+        logger.debug(
+            "[智能分段] 回复长度 %d 低于机械分段下限 %d，单条发送",
+            len(text),
+            mech_min_chars,
+        )
         return None
     max_messages = _get_max_messages(get_config)
     provider_id = str(get_config("segment_provider_id", "") or "").strip()
     segments: list[str] | None = None
     if provider_id:
-        segments = await _try_llm_segment(text, provider_id, context, get_config)
+        if len(text) >= llm_min_chars:
+            segments = await _try_llm_segment(text, provider_id, context, get_config)
+        else:
+            logger.debug(
+                "[智能分段] 回复长度 %d 未达 LLM 分段阈值 %d，走机械分段",
+                len(text),
+                llm_min_chars,
+            )
     else:
         logger.warning("[智能分段] 未配置 segment_provider_id，仅使用规则分段")
     if segments is None:

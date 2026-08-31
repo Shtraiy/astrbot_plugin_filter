@@ -60,10 +60,16 @@
     "default": ""
   },
   "segment_min_chars": {
-    "description": "分段最小字数",
+    "description": "LLM 智能分段最小字数",
     "type": "int",
-    "hint": "纯文本回复达到该字数才尝试智能分段，短于此直接一条发送；建议 60~200。",
+    "hint": "纯文本回复达到该字数才调用分段 provider 做语义分段；短于此（但达到机械分段下限）会走机械分段。建议 60~200。",
     "default": 80
+  },
+  "segment_mechanical_min_chars": {
+    "description": "机械分段最小字数",
+    "type": "int",
+    "hint": "未达 LLM 分段阈值、未配置 provider 或 LLM 分段失败时，达到该字数的回复仍按句号/波浪号等机械分段并清理分隔符；短于此直接一条发送。",
+    "default": 20
   },
   "segment_max_messages": {
     "description": "最大分段数",
