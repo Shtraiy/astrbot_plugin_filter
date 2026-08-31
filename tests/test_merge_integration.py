@@ -45,35 +45,6 @@ def test_wake_followup_during_window_is_merged_and_stopped():
     assert stopped is True
 
 
-def test_planning_supplement_supersedes_and_regenerates():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    new = FakeEvent("u1", "group:1", "补充", wake=True)
-
-    async def run():
-        await optimizer.on_waiting_llm_request(old)  # sleep 打桩为 0，直接 planning
-        await optimizer.on_waiting_llm_request(new)
-        return new.message_str, old.stopped
-
-    merged, stopped = asyncio.run(run())
-
-    assert merged == MergeWindowManager.format_segments(["第一段", "补充"])
-    assert stopped is True
-
-
-def test_group_non_wake_supplement_not_promoted_during_planning():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    follow = FakeEvent("u1", "group:1", "补充", wake=False)
-
-    async def run():
-        await optimizer.on_waiting_llm_request(old)
-        await optimizer.on_message(follow)
-        return follow.is_at_or_wake_command
-
-    assert asyncio.run(run()) is False
-
-
 def test_content_guard_blocks_merged_text():
     optimizer = make_optimizer(
         enable_content_guard=True,
@@ -85,19 +56,6 @@ def test_content_guard_blocks_merged_text():
     async def run():
         await optimizer.on_waiting_llm_request(event)
         await optimizer.on_llm_request(event, req)
-        return event.stopped
-
-    assert asyncio.run(run()) is True
-
-
-def test_on_llm_response_guard_stops_superseded():
-    optimizer = make_optimizer()
-    event = FakeEvent("u1", "group:1", "旧", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(event))
-    optimizer._get_reply_coordinator().supersede_active_event(event)
-
-    async def run():
-        await optimizer.on_llm_response_guard(event, object())
         return event.stopped
 
     assert asyncio.run(run()) is True
@@ -185,53 +143,6 @@ def test_media_only_message_gets_recognition_prompt_after_window():
     asyncio.run(optimizer.on_waiting_llm_request(event))
 
     assert event.message_str == MEDIA_ONLY_PROMPT
-
-
-def test_media_only_supplement_gets_recognition_prompt_during_planning():
-    optimizer = make_optimizer()
-    old = FakeEvent(
-        "u1",
-        "group:1",
-        text="",
-        chain=[Image("file:///old.png")],
-        wake=True,
-    )
-    new = FakeEvent(
-        "u1",
-        "group:1",
-        "补充",
-        wake=True,
-    )
-
-    async def run():
-        await optimizer.on_waiting_llm_request(old)
-        await optimizer.on_waiting_llm_request(new)
-        return new.message_str
-
-    merged = asyncio.run(run())
-
-    assert merged == MergeWindowManager.format_segments([MEDIA_ONLY_PROMPT, "补充"])
-
-
-def test_media_supplement_keeps_existing_text_without_placeholder():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    new = FakeEvent(
-        "u1",
-        "group:1",
-        text="",
-        chain=[Image("file:///new.png")],
-        wake=True,
-    )
-
-    async def run():
-        await optimizer.on_waiting_llm_request(old)
-        await optimizer.on_waiting_llm_request(new)
-        return new.message_str
-
-    merged = asyncio.run(run())
-
-    assert merged == "第一段"
 
 
 def test_quoted_wakeup_cancels_media_window_and_keeps_own_text():
@@ -372,167 +283,6 @@ def test_window_captured_message_still_consumed():
     assert stopped is True
 
 
-def test_expired_planning_does_not_promote_later_media_message():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # 窗口 sleep 打桩 0 → planning
-    merger = optimizer._get_message_merger()
-    key = merger.window_key(old)
-    merger._states[key].planning_started_at = 0.0  # 强制过期
-
-    img = FakeEvent(
-        "u1",
-        "group:1",
-        text="",
-        chain=[Image("file:///x.png")],
-        wake=False,
-    )
-    asyncio.run(optimizer.on_message(img))
-
-    assert img.is_at_or_wake_command is False
-
-
-def test_same_sender_wakeup_requests_agent_stop_even_without_merge_state():
-    optimizer = make_optimizer()
-    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(first))
-    optimizer._get_message_merger().clear_state(first)  # 模拟状态已被清理
-
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-    second = FakeEvent("u1", "group:1", "第二次唤醒", wake=True)
-    asyncio.run(optimizer.on_message(second))
-
-    assert len(calls) == 1
-
-
-def test_interrupt_branch_marks_active_event_agent_stop_requested():
-    """on_message 打断分支必须直接把停止标记写到 active 事件上。
-
-    AstrBot 4.27 的 follow-up capture 检查的是 runner 事件上的
-    ``agent_stop_requested``；仅依赖 ``active_event_registry`` 会在事件未
-    注册进 registry（与 coordinator 状态分离）或标记被重置时漏掉，导致
-    新消息被吞进旧规划而不是合并重生成。
-    """
-    optimizer = make_optimizer()
-    first = FakeEvent("u1", "FriendMessage:1", "第一次唤醒", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(first))
-    assert optimizer._get_message_merger().planning_active(first)
-
-    second = FakeEvent("u1", "FriendMessage:1", "第二次唤醒", wake=True)
-    asyncio.run(optimizer.on_message(second))
-
-    assert first.get_extra("agent_stop_requested") is True
-
-
-def test_planning_merge_marks_old_event_agent_stop_requested():
-    """规划期合并时同样给旧事件直接打上停止标记。
-
-    旧事件若仍有活跃 runner，直接标记可让后续消息的 follow-up capture
-    跳过旧规划；同时合并文本本身必须仍然生效。
-    """
-    optimizer = make_optimizer()
-    first = FakeEvent("u1", "FriendMessage:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(first))
-
-    second = FakeEvent("u1", "FriendMessage:1", "补充", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(second))
-
-    assert first.get_extra("agent_stop_requested") is True
-    assert second.message_str == MergeWindowManager.format_segments(
-        ["第一段", "补充"]
-    )
-
-
-def test_stop_remark_reattaches_flag_after_astrbot_reset():
-    """AstrBot master 在 agent 中止时会把 agent_stop_requested 重置为 False。
-
-    重标任务必须在重置后重新打上标记，直到捕获窗口结束，否则新消息仍可能
-    在旧 runner 移除前被 follow-up 吞掉。
-    """
-    optimizer = make_optimizer(merge_stop_remark_seconds=0.5)
-
-    async def run():
-        first = FakeEvent("u1", "FriendMessage:1", "第一次唤醒", wake=True)
-        await optimizer.on_waiting_llm_request(first)
-        second = FakeEvent("u1", "FriendMessage:1", "第二次唤醒", wake=True)
-        await optimizer.on_message(second)
-        # 模拟 AstrBot 中止 agent 时对标记的重置。
-        first.set_extra("agent_stop_requested", False)
-        assert first.get_extra("agent_stop_requested") is False
-        await asyncio.sleep(0.15)
-        return first.get_extra("agent_stop_requested")
-
-    assert asyncio.run(run()) is True
-
-
-def test_group_planning_wakeup_marks_active_event_agent_stop_requested():
-    """群聊规划期：唤醒消息打断旧回复时同样直接给 active 事件打标记。"""
-    optimizer = make_optimizer()
-    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(first))
-
-    second = FakeEvent("u1", "group:1", "第二次唤醒", wake=True)
-    asyncio.run(optimizer.on_message(second))
-
-    assert first.get_extra("agent_stop_requested") is True
-
-
-def test_group_streaming_reply_hang_does_not_mark_agent_stop_requested():
-    """群聊已开始输出：非修正词悬挂，让核心 follow-up 接管，不打标记。"""
-    optimizer = make_optimizer()
-    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(first))
-    first.set_extra("llm_output_started", True)
-
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-    second = FakeEvent("u1", "group:1", "补充", wake=True)
-    asyncio.run(optimizer.on_message(second))
-
-    assert calls == []
-    assert first.get_extra("agent_stop_requested") is not True
-
-
-def test_other_sender_wakeup_does_not_request_agent_stop():
-    optimizer = make_optimizer()
-    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(first))
-
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-    other = FakeEvent("u2", "group:1", "别人说话", wake=True)
-    asyncio.run(optimizer.on_message(other))
-
-    assert calls == []
-
-
-def test_non_wake_same_sender_message_does_not_stop_agent():
-    optimizer = make_optimizer()
-    first = FakeEvent("u1", "group:1", "第一次唤醒", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(first))
-    optimizer._get_message_merger().clear_state(first)  # 无规划状态
-
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-    casual = FakeEvent("u1", "group:1", "普通消息不唤醒", wake=False)
-    asyncio.run(optimizer.on_message(casual))
-
-    assert calls == []
-
-
-def test_superseded_result_discarded_on_decoration():
-    optimizer = make_optimizer()
-    event = FakeEvent("u1", "group:1", "旧", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(event))
-    optimizer._get_reply_coordinator().supersede_active_event(event)
-    event.set_result(SimpleNamespace(chain=[Plain("旧回复")]))
-
-    asyncio.run(optimizer.on_decorating_result(event))
-
-    assert event.get_result().chain == []
-
-
 def test_decoration_strips_structure_tags():
     optimizer = make_optimizer()
     result = SimpleNamespace(chain=[Plain("原来是这样呀</blockquote> [图片]")])
@@ -618,168 +368,6 @@ def test_marking_hook_skips_stopped_events():
     assert req.extra_user_content_parts == []
 
 
-def test_empty_event_during_planning_does_not_request_agent_stop():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    empty = FakeEvent("u1", "group:1", text="", wake=True)
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-
-    asyncio.run(optimizer.on_message(empty))
-
-    assert calls == []
-
-
-def test_non_wake_text_event_during_planning_does_not_request_agent_stop():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    follow = FakeEvent("u1", "group:1", "补充", wake=False)
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-
-    asyncio.run(optimizer.on_message(follow))
-
-    assert calls == []
-
-
-def test_llm_output_started_supplement_hangs_without_stop_or_promote():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    old.set_extra("llm_output_started", True)  # 第一条已产出 LLM 响应
-    follow = FakeEvent("u1", "group:1", "补充", wake=False)
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-
-    asyncio.run(optimizer.on_message(follow))
-
-    assert calls == []
-    assert follow.is_at_or_wake_command is False  # 未提升为唤醒
-    assert old.stopped is False  # 未 supersede
-
-
-def test_llm_output_started_supplement_hangs_on_waiting_and_clears_planning_state():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    old.set_extra("llm_output_started", True)
-    follow = FakeEvent("u1", "group:1", "补充", wake=False)
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-
-    asyncio.run(optimizer.on_waiting_llm_request(follow))
-
-    assert calls == []
-    assert old.stopped is False
-    assert follow.message_str == "补充"  # 未被合并改写
-    assert optimizer._get_message_merger().planning_active(follow) is False
-
-
-def test_provider_request_without_llm_output_still_interrupts_and_regenerates():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    # v3.0.14 曾把 provider_request 存在误判为"已开始"而悬挂；
-    # 实际未产出 LLM 响应，必须仍打断合并。
-    old.set_extra("provider_request", object())
-    new = FakeEvent("u1", "group:1", "补充", wake=True)
-
-    asyncio.run(optimizer.on_waiting_llm_request(new))
-
-    assert old.stopped is True  # 被打断
-    assert new.message_str == MergeWindowManager.format_segments(
-        ["第一段", "补充"]
-    )  # 合并重生成
-
-
-def test_correction_interrupts_even_after_llm_output_started():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    old.set_extra("llm_output_started", True)
-    new = FakeEvent("u1", "group:1", "再想想", wake=True)
-
-    asyncio.run(optimizer.on_waiting_llm_request(new))
-
-    assert old.stopped is True
-    assert new.message_str == MergeWindowManager.format_segments(
-        ["第一段", "再想想"]
-    )
-
-
-def test_llm_response_guard_marks_output_started():
-    optimizer = make_optimizer()
-    event = FakeEvent("u1", "group:1", "旧", wake=True)
-    resp = SimpleNamespace(completion_text="正常回复")
-
-    asyncio.run(optimizer.on_llm_response_guard(event, resp))
-
-    assert event.get_extra("llm_output_started") is True
-
-
-def test_streaming_started_supplement_hangs_without_stop_or_promote():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    # AstrBot 流式响应在 agent 启动时就 set_result(STREAMING_RESULT)，
-    # 但本轮 LLM 调用尚未完成，llm_output_started 标记还没写入。
-    old.set_result(SimpleNamespace(result_content_type="streaming"))
-    follow = FakeEvent("u1", "group:1", "补充", wake=False)
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-
-    asyncio.run(optimizer.on_message(follow))
-
-    assert calls == []
-    assert follow.is_at_or_wake_command is False
-    assert old.stopped is False
-
-
-def test_wake_supplement_hangs_after_llm_output_started():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    old.set_extra("llm_output_started", True)
-    follow = FakeEvent("u1", "group:1", "@bot 补充", wake=True)
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-
-    asyncio.run(optimizer.on_message(follow))
-
-    assert calls == []
-    assert old.stopped is False
-
-
-def test_private_supplement_interrupts_even_after_llm_output_started():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "FriendMessage:2419269719", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    old.set_extra("llm_output_started", True)
-    follow = FakeEvent("u1", "FriendMessage:2419269719", "补充", wake=True)
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-
-    asyncio.run(optimizer.on_message(follow))
-
-    # 私聊：每条消息都是对 bot 说的，即使旧回复已产出 LLM 响应也一律打断，
-    # 避免 follow-up 排队等旧 agent（如 LLM 超时重试）导致消息石沉大海。
-    assert len(calls) == 1
-    assert old.stopped is False
-
-
-def test_planning_supplement_records_last_message_id():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    new = FakeEvent("u1", "group:1", "补充", wake=True)
-
-    asyncio.run(optimizer.on_waiting_llm_request(old))
-    asyncio.run(optimizer.on_waiting_llm_request(new))
-
-    assert new.get_extra("merge_last_message_id") == new.message_obj.message_id
-
-
 def test_on_decorating_result_retargets_quote_to_last_merged_message():
     optimizer = make_optimizer()
     first = FakeEvent("u1", "group:1", "第一段", wake=True)
@@ -801,31 +389,6 @@ def test_on_decorating_result_keeps_own_quote_without_merge():
     asyncio.run(optimizer.on_decorating_result(event))
 
     assert event.message_obj.message_id == original
-
-
-def test_other_sender_message_does_not_clear_planning_state():
-    optimizer = make_optimizer()
-    old = FakeEvent("u1", "group:1", "第一段", wake=True)
-    asyncio.run(optimizer.on_waiting_llm_request(old))  # -> planning
-    old.set_extra("llm_output_started", True)
-    other = FakeEvent("u2", "group:1", "别人说话", wake=True)
-    calls = []
-    optimizer._request_agent_stop = lambda event: calls.append(event)
-
-    asyncio.run(optimizer.on_waiting_llm_request(other))
-
-    assert calls == []
-    assert optimizer._get_message_merger().planning_active(old) is True
-
-
-def test_empty_event_does_not_open_merge_window():
-    optimizer = make_optimizer()
-    empty = FakeEvent("u1", "group:1", text="", wake=True)
-
-    asyncio.run(optimizer.on_waiting_llm_request(empty))
-
-    assert optimizer._get_message_merger().planning_active(empty) is False
-    assert empty.stopped is False
 
 
 def test_image_and_two_texts_within_window_merge_into_one_request():
@@ -862,29 +425,38 @@ def test_image_and_two_texts_within_window_merge_into_one_request():
     assert third_stopped is True
 
 
-def test_planning_supplements_keep_accumulating_text_and_image():
+def test_window_resets_on_new_message_until_silence():
     optimizer = make_optimizer()
-    first = FakeEvent(
-        "u1",
-        "group:1",
-        text="",
-        chain=[Image("file:///a.png")],
-        wake=True,
-    )
-    second = FakeEvent("u1", "group:1", "第一句", wake=True)
-    third = FakeEvent("u1", "group:1", "第二句", wake=True)
+    optimizer._get_merge_window_seconds = lambda: 0.15
+    first = FakeEvent("u1", "group:1", "第一段", wake=True)
+    second = FakeEvent("u1", "group:1", "第二段", wake=False)
+    third = FakeEvent("u1", "group:1", "第三段", wake=False)
 
     async def run():
-        await optimizer.on_waiting_llm_request(first)  # window -> planning
-        await optimizer.on_waiting_llm_request(second)  # merge + regenerate
-        await optimizer.on_waiting_llm_request(third)  # merge + regenerate
-        return third.message_str, third.get_messages(), first.stopped, second.stopped
+        first_task = asyncio.create_task(optimizer.on_waiting_llm_request(first))
+        await asyncio.sleep(0.05)
+        await optimizer.on_message(second)  # 重置计时
+        await asyncio.sleep(0.10)          # 未满静默，仍在窗口
+        await optimizer.on_message(third)  # 再次重置
+        await first_task                    # 静默满后收口
+        return first.message_str
 
-    merged, chain, first_stopped, second_stopped = asyncio.run(run())
+    merged = asyncio.run(run())
 
     assert merged == MergeWindowManager.format_segments(
-        [MEDIA_ONLY_PROMPT, "第一句", "第二句"]
+        ["第一段", "第二段", "第三段"]
     )
-    assert any(isinstance(comp, Image) for comp in chain)
-    assert first_stopped is True
-    assert second_stopped is True
+
+
+def test_inflight_reply_gets_no_stop_on_new_message():
+    optimizer = make_optimizer()
+    old = FakeEvent("u1", "group:1", "第一段", wake=True)
+    asyncio.run(optimizer.on_waiting_llm_request(old))  # 窗口已收口
+    assert optimizer._get_message_merger().quiet_remaining(old, 6.0) == 0.0
+
+    follow = FakeEvent("u1", "group:1", "@bot 补充", wake=True)
+    asyncio.run(optimizer.on_message(follow))
+    asyncio.run(optimizer.on_waiting_llm_request(follow))
+
+    assert old.stopped is False
+    assert follow.message_str == "@bot 补充"  # 未被合并改写

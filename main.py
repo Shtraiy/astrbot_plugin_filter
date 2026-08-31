@@ -20,11 +20,6 @@ from .interruption_guard import (
     is_interruption_placeholder_text,
     scrub_interruption_placeholders,
 )
-from .merge_guards import (
-    is_correction_follow_up,
-    should_interrupt_running_reply,
-    stop_if_superseded,
-)
 from .merge_window import MergeWindowManager
 from .onboarding_guard import OnboardingGuard
 from .reply_coordinator import ReplyCoordinator
@@ -89,12 +84,11 @@ class LanguageLogicOptimizer(Star):
 
     @_event_filter.event_message_type(_event_filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent) -> None:
-        """Capture window-phase follow-ups; interrupt only AstrBot wake-ups.
+        """Capture same-user non-wake follow-ups while a window is open.
 
-        Wake-up follows AstrBot's own judgement (``is_at_or_wake_command``):
-        private chat wakes on everything, group chat only on @bot / wake
-        prefix / quoting the bot. Non-wake group messages never interrupt an
-        in-flight reply nor force a merge regeneration.
+        In-flight replies are never interrupted: once the window closes and
+        the reply is being generated, new messages are left to AstrBot's
+        native follow-up handling.
         """
         if not self._get_config("enable_message_merge", True):
             return
@@ -102,33 +96,14 @@ class LanguageLogicOptimizer(Star):
             return
         try:
             merger = self._get_message_merger()
-            coordinator = self._get_reply_coordinator()
             if merger.is_window_open(event):
                 merger.capture(event)
-                return
-            if not self._event_is_wake_up(event):
-                # 遵循 AstrBot 唤醒机制：群聊未唤醒的消息不打断旧规划、
-                # 不提升为唤醒、不参与合并重生成。
-                return
-            active = coordinator.active_event_for(event)
-            if active is None:
-                return
-            if not self._should_interrupt_active_reply(event, active):
-                # 活跃回复已开始输出且非修正词：悬挂，让核心 follow-up 接管。
-                merger.clear_state(active)
-                return
-            # Same user woke again while their reply is still active:
-            # stop the running agent first so AstrBot 4.27's follow-up
-            # capture cannot swallow this message into the old planning.
-            self._request_agent_stop(event)
-            self._mark_agent_stop_requested(active)
-            self._schedule_stop_remark(active)
         except Exception:
             logger.warning("[消息合并] 捕获消息失败", exc_info=True)
 
     @_event_filter.on_waiting_llm_request(priority=1000)
     async def on_waiting_llm_request(self, event: AstrMessageEvent) -> None:
-        """Merge same-user segments; supersede old planning when supplemented."""
+        """Open/merge the sliding window; never interrupt an in-flight reply."""
         if not event_has_content(event):
             return
         merger = self._get_message_merger()
@@ -141,37 +116,21 @@ class LanguageLogicOptimizer(Star):
         window_result = "none"
 
         if merge_key is not None:
-            window_result = await self._handle_window_phase(
-                event, merger, coordinator
-            )
+            window_result = await self._handle_window_phase(event, merger)
             if window_result == "consumed":
-                return
-            if await self._handle_planning_phase(event, merger, coordinator):
                 return
 
         if not await coordinator.admit_wakeup(event):
             return
-        if (
-            merge_key is not None
-            and not coordinator.is_session_busy(event)
-            and window_result != "cancel_quote"
-        ):
+        if merge_key is not None and not coordinator.is_session_busy(event) and window_result != "cancel_quote":
             await self._open_merge_window(event, merger)
 
     async def _handle_window_phase(
         self,
         event: AstrMessageEvent,
         merger: MergeWindowManager,
-        coordinator: ReplyCoordinator,
     ) -> str:
-        """Handle a same-user follow-up while the window is open.
-
-        Returns ``"consumed"`` when the event was merged and stopped,
-        ``"cancel_quote"`` when the window was cancelled for a quoted wake-up,
-        or ``"none"`` when no window is open or the message cannot be merged
-        (ignore prefix, over-limit, unmergeable components) and must proceed
-        as an independent message instead of being silently dropped.
-        """
+        """Handle a same-user follow-up while the window is open."""
         if not merger.is_window_open(event):
             return "none"
         if merger.message_has_quote(event):
@@ -181,71 +140,38 @@ class LanguageLogicOptimizer(Star):
             # handle the quoted image natively.
             old = merger.cancel_window(event)
             if old is not None:
-                coordinator.supersede_active_event(old)
+                _stop_event(old)
             return "cancel_quote"
         if merger.merge_wake(event):
             event.stop_event()
             return "consumed"
         if merger.is_captured(event):
-            # 已被 on_message 的 capture 并入窗口：消费本次事件，避免重复触发。
             event.stop_event()
             return "consumed"
-        # 无法合并（忽略前缀 / 超限 / 不可合并组件）：放行，作为独立消息处理。
         return "none"
-
-    async def _handle_planning_phase(
-        self,
-        event: AstrMessageEvent,
-        merger: MergeWindowManager,
-        coordinator: ReplyCoordinator,
-    ) -> bool:
-        """Merge a planning-phase supplement into a regenerated request."""
-        active = coordinator.active_event_for(event)
-        if not self._should_interrupt_active_reply(event, active):
-            # Provider 已开始调用且非修正词：悬挂，让核心 follow-up 接管；
-            # 清理 planning state，避免下一次消息被误判为规划期补充。
-            if active is not None:
-                merger.clear_state(active)
-            return False
-        pending = merger.take_planning(event)
-        if pending is None:
-            return False
-        old_event, earlier_segments, earlier_media = pending
-        if old_event is not None:
-            self._request_agent_stop(event)
-            self._mark_agent_stop_requested(old_event)
-            coordinator.supersede_active_event(old_event)
-        segments = merger.append_segment(
-            earlier_segments,
-            str(getattr(event, "message_str", "") or ""),
-        )
-        event.message_str = merger.format_segments(segments)
-        merger.attach_media(event, earlier_media)
-        if not (event.message_str or "").strip() and merger.has_media(event):
-            event.message_str = MEDIA_ONLY_PROMPT
-            segments = [event.message_str]
-        if not await coordinator.admit_wakeup(event):
-            return True
-        try:
-            last_id = getattr(getattr(event, "message_obj", None), "message_id", None)
-            if last_id is not None:
-                event.set_extra("merge_last_message_id", last_id)
-        except Exception:
-            logger.debug("[消息合并] 记录最后消息引用失败", exc_info=True)
-        merger.rearm_planning(event, segments)
-        return True
 
     async def _open_merge_window(
         self,
         event: AstrMessageEvent,
         merger: MergeWindowManager,
     ) -> None:
-        """Hold the event for the merge window, then finalize merged text."""
+        """Hold the event until the user stays silent for the full window."""
         if not merger.start_window(event):
             return
         try:
-            await asyncio.sleep(self._get_merge_window_seconds())
+            while True:
+                if _event_is_stopped(event):
+                    return
+                remaining = merger.quiet_remaining(
+                    event, self._get_merge_window_seconds()
+                )
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(remaining, 0.2))
         finally:
+            if _event_is_stopped(event):
+                merger.clear_state(event)
+                return
             merged = merger.finalize_window(event)
             if (
                 not _event_is_stopped(event)
@@ -254,7 +180,6 @@ class LanguageLogicOptimizer(Star):
             ):
                 merged = MEDIA_ONLY_PROMPT
             event.message_str = merged
-            merger.sync_pending_text(event, merged)
 
     @_event_filter.on_llm_request(priority=1000)
     async def on_llm_request(self, event: AstrMessageEvent, req) -> None:
@@ -386,18 +311,11 @@ class LanguageLogicOptimizer(Star):
 
     @_event_filter.on_llm_response(priority=1000)
     async def on_llm_response_guard(self, event: AstrMessageEvent, resp) -> None:
-        """Stop superseded events before downstream hooks (e.g. livingmemory)."""
+        """Stop AstrBot interruption placeholders from being recorded."""
         try:
-            stop_if_superseded(self._get_reply_coordinator(), event)
-            if not _event_is_stopped(event) and _resp_is_interruption_placeholder(
-                resp
-            ):
+            if not _event_is_stopped(event) and _resp_is_interruption_placeholder(resp):
                 event.stop_event()
                 logger.info("[自回复标记] 已拦截中断占位符响应，阻止写入记忆")
-            if not _event_is_stopped(event):
-                # 标记该事件已产出过 LLM 响应：后续同会话新消息据此
-                # 区分"打断合并"（未产出）与"悬挂"（已产出）。
-                event.set_extra("llm_output_started", True)
         except Exception:
             logger.debug("[消息合并] 响应守卫失败", exc_info=True)
 
@@ -406,9 +324,6 @@ class LanguageLogicOptimizer(Star):
         if not event:
             return
         try:
-            if self._get_reply_coordinator().discard_superseded_result(event):
-                self._get_message_merger().clear_state(event)
-                return
             result = event.get_result()
             chain = getattr(result, "chain", None)
             origin = getattr(event, "unified_msg_origin", None)
@@ -438,8 +353,13 @@ class LanguageLogicOptimizer(Star):
                         cleaned = _strip_structure_tags(comp.text)
                         if cleaned != comp.text:
                             comp.text = cleaned
+            await self._maybe_segment_reply(event)
         except Exception:
             logger.debug("[消息合并] 结果清理失败", exc_info=True)
+
+    async def _maybe_segment_reply(self, event: AstrMessageEvent) -> None:
+        """LLM 智能分段（Task 5 实现）。"""
+        return
 
     @_event_filter.after_message_sent(priority=1000)
     async def after_message_sent(self, event: AstrMessageEvent) -> None:
@@ -479,140 +399,6 @@ class LanguageLogicOptimizer(Star):
                 return True
         return True
 
-    def _request_agent_stop(self, event: AstrMessageEvent) -> None:
-        """AstrBot 4.25+: request real cancellation of the session's running agent.
-
-        Also sets ``agent_stop_requested`` on the old event, which makes
-        AstrBot 4.27's follow-up capture skip it so the merged regeneration
-        can proceed through the normal pipeline. No-op on older AstrBot.
-        """
-        origin = getattr(event, "unified_msg_origin", None)
-        if not origin:
-            return
-        try:
-            from astrbot.core.utils.active_event_registry import (
-                active_event_registry,
-            )
-        except Exception:
-            return
-        try:
-            active_event_registry.request_agent_stop_all(origin, exclude=event)
-        except Exception:
-            logger.debug("[消息合并] 请求停止旧 Agent 失败", exc_info=True)
-
-    def _mark_agent_stop_requested(self, event: Any | None) -> None:
-        """Directly mark the active event so AstrBot 4.27's follow-up capture skips it.
-
-        ``active_event_registry.request_agent_stop_all`` and the coordinator's
-        active-event tracking are maintained separately: if the event is not
-        registered in the registry (or the runner resets the flag on abort),
-        the registry call alone can silently miss it, and the new message gets
-        swallowed into the old planning as a follow-up. Setting the flag on the
-        exact event the runner holds is the second line of defense.
-        """
-        setter = getattr(event, "set_extra", None)
-        if not callable(setter):
-            return
-        try:
-            setter("agent_stop_requested", True)
-        except Exception:
-            logger.warning("[消息合并] 直接标记停止请求失败", exc_info=True)
-
-    def _schedule_stop_remark(self, event: Any | None) -> None:
-        """Periodically re-set ``agent_stop_requested`` for a short window.
-
-        AstrBot master 在 agent 中止时会把该标记重置为 False（
-        ``astr_agent_run_util``），而旧 runner 要稍后才从活跃列表移除；
-        若新消息恰好在这两者之间到达 follow-up capture，仍会被吞。周期重标
-        直到事件停止或窗口结束，抵消这次重置，把竞态窗口封死。
-        """
-        setter = getattr(event, "set_extra", None)
-        if not callable(setter):
-            return
-        try:
-            total = self._get_float_config("merge_stop_remark_seconds", 1.5)
-        except Exception:
-            return
-        total = max(0.0, min(total, 5.0))
-        if total <= 0:
-            return
-        interval = min(0.05, total / 2)
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        start = loop.time()
-
-        async def _remark() -> None:
-            try:
-                while asyncio.get_running_loop().time() - start <= total:
-                    try:
-                        if (
-                            getattr(event, "is_stopped", None) is not None
-                            and callable(event.is_stopped)
-                            and event.is_stopped()
-                        ):
-                            return
-                        event.set_extra("agent_stop_requested", True)
-                    except Exception:
-                        logger.warning("[消息合并] 重标停止标记失败", exc_info=True)
-                        return
-                    await asyncio.sleep(interval)
-            except Exception:
-                logger.debug("[消息合并] 重标任务异常退出", exc_info=True)
-
-        try:
-            loop.create_task(_remark())
-        except Exception:
-            logger.warning("[消息合并] 启动重标任务失败", exc_info=True)
-
-    def _should_interrupt_active_reply(
-        self,
-        event: AstrMessageEvent,
-        active: Any | None,
-    ) -> bool:
-        """Decide whether an in-flight reply must be interrupted.
-
-        No LLM output produced yet -> interrupt (cheap merge regeneration);
-        LLM output already started -> hang unless the message is a correction.
-        """
-        if active is None:
-            return True
-        if self._event_is_private_chat(event):
-            # 私聊：每条消息都是对 bot 说的，一律打断旧回复并合并重生成，
-            # 避免 follow-up 排队等旧 agent（如 LLM 超时重试）导致不回复。
-            return True
-        reply_output_started = False
-        try:
-            reply_output_started = bool(active.get_extra("llm_output_started"))
-        except Exception:
-            logger.debug("[消息合并] 读取 llm_output_started 失败", exc_info=True)
-        if not reply_output_started:
-            # AstrBot 流式响应在 agent 启动时就 set_result(STREAMING_RESULT)，
-            # 而 llm_output_started 要到本轮 LLM 调用完成才写入。只要结果已
-            # 挂上事件，就认为输出已开始，不应打断。
-            try:
-                reply_output_started = active.get_result() is not None
-            except Exception:
-                logger.debug("[消息合并] 读取活跃事件结果失败", exc_info=True)
-        try:
-            is_correction = is_correction_follow_up(event.message_str)
-        except Exception:
-            is_correction = False
-        return should_interrupt_running_reply(
-            reply_output_started,
-            is_correction,
-        )
-
-    def _event_is_private_chat(self, event: AstrMessageEvent) -> bool:
-        checker = getattr(event, "is_private_chat", None)
-        if callable(checker):
-            try:
-                return bool(checker())
-            except Exception:
-                return False
-        return False
-
     def _get_guard_terms(self) -> list[str]:
         return parse_terms(self._get_config("content_guard_block_terms", ""))
 
@@ -651,6 +437,16 @@ def _event_is_stopped(event) -> bool:
         except Exception:
             return False
     return bool(getattr(event, "stopped", False))
+
+
+def _stop_event(event) -> None:
+    """Best-effort stop of an event (e.g. a cancelled window owner)."""
+    stopper = getattr(event, "stop_event", None)
+    if callable(stopper):
+        try:
+            stopper()
+        except Exception:
+            logger.debug("[消息合并] 停止事件失败", exc_info=True)
 
 
 def _resp_is_interruption_placeholder(resp) -> bool:

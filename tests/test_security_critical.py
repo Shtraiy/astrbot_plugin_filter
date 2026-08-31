@@ -46,14 +46,3 @@ def test_decoration_passes_normal_chain_through_unchanged():
     assert len(result.chain) == 1
     assert result.chain[0].text == "正常回复内容"
 
-
-def test_decoration_discards_superseded_result():
-    optimizer = make_optimizer()
-    event = FakeEvent(text="旧")
-    asyncio.run(optimizer.on_waiting_llm_request(event))
-    optimizer._get_reply_coordinator().supersede_active_event(event)
-    event.set_result(SimpleNamespace(chain=[Plain("旧回复")]))
-
-    asyncio.run(optimizer.on_decorating_result(event))
-
-    assert event.get_result().chain == []
